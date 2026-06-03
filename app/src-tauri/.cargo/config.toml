@@ -1,0 +1,6 @@
+# Speed up local Linux builds by using clang + the lld linker (much faster
+# linking than the default bfd/gold). Scoped to Linux only, so Windows/macOS
+# builds are unaffected. Requires `clang` and `lld` to be installed.
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
