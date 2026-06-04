@@ -12,6 +12,7 @@
     "build:linux": "cross-env APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=1 tauri build"
   },
   "dependencies": {
+    "@kenjiuno/msgreader": "^1.28.0",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-dropdown-menu": "^2.1.16",
     "@radix-ui/react-select": "^2.2.6",

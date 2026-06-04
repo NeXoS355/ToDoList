@@ -18,9 +18,7 @@ export async function getIssues(): Promise<Issue[]> {
     SELECT i.*,
       (SELECT COUNT(*) FROM comments c WHERE c.issue_id = i.id) as comment_count
     FROM issues i
-    ORDER BY
-      CASE i.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
-      i.updated_at DESC
+    ORDER BY i.sort_order DESC, i.created_at DESC
   `);
   for (const issue of issues) {
     issue.labels = await getIssueLabels(issue.id);
@@ -42,13 +40,16 @@ export async function createIssue(data: {
   body: string;
   priority: Issue['priority'];
   labelIds?: string[];
+  source?: string | null;
+  sourceMeta?: Record<string, unknown> | null;
 }): Promise<Issue> {
   const db = await getDb();
   const id = uuid();
   const now = Date.now();
+  const sourceMeta = data.sourceMeta ? JSON.stringify(data.sourceMeta) : null;
   await db.execute(
-    'INSERT INTO issues (id, title, body, priority, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [id, data.title, data.body, data.priority, 'open', now, now]
+    'INSERT INTO issues (id, title, body, priority, status, created_at, updated_at, sort_order, source, source_meta) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [id, data.title, data.body, data.priority, 'open', now, now, now, data.source ?? null, sourceMeta]
   );
   if (data.labelIds?.length) {
     for (const lid of data.labelIds) {
@@ -58,16 +59,35 @@ export async function createIssue(data: {
   return (await getIssue(id))!;
 }
 
+const UPDATABLE_COLUMNS = ['title', 'body', 'priority', 'status'] as const;
+
 export async function updateIssue(id: string, data: Partial<Pick<Issue, 'title' | 'body' | 'priority' | 'status'>>): Promise<void> {
   const db = await getDb();
-  const fields = Object.keys(data).map(k => `${k} = ?`).join(', ');
-  const values = [...Object.values(data), Date.now(), id];
+  // Whitelist column names so they can never become an injection vector, even
+  // if a caller passes unexpected keys (values stay parameterized regardless).
+  const keys = UPDATABLE_COLUMNS.filter(k => k in data);
+  if (keys.length === 0) return;
+  const fields = keys.map(k => `${k} = ?`).join(', ');
+  const values = [...keys.map(k => data[k]), Date.now(), id];
   await db.execute(`UPDATE issues SET ${fields}, updated_at = ? WHERE id = ?`, values);
 }
 
 export async function deleteIssue(id: string): Promise<void> {
   const db = await getDb();
   await db.execute('DELETE FROM issues WHERE id = ?', [id]);
+}
+
+/**
+ * Persist manual ordering. `orderedIds` is the full set of issue ids in the
+ * desired top-to-bottom order; sort_order is reassigned to a fresh contiguous
+ * descending range. updated_at is deliberately left untouched.
+ */
+export async function reorderIssues(orderedIds: string[]): Promise<void> {
+  const db = await getDb();
+  const n = orderedIds.length;
+  for (let i = 0; i < n; i++) {
+    await db.execute('UPDATE issues SET sort_order = ? WHERE id = ?', [n - i, orderedIds[i]]);
+  }
 }
 
 export async function getComments(issueId: string): Promise<Comment[]> {
@@ -130,6 +150,20 @@ export async function getAttachmentData(id: string): Promise<Pick<Attachment, 'd
 export async function deleteAttachment(id: string): Promise<void> {
   const db = await getDb();
   await db.execute('DELETE FROM attachments WHERE id = ?', [id]);
+}
+
+export async function getSetting(key: string): Promise<string | null> {
+  const db = await getDb();
+  const rows = await db.select<{ value: string }[]>('SELECT value FROM settings WHERE key = ?', [key]);
+  return rows[0]?.value ?? null;
+}
+
+export async function setSetting(key: string, value: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+    [key, value]
+  );
 }
 
 export async function getLabels(): Promise<Label[]> {

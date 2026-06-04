@@ -1,5 +1,6 @@
-import { motion, AnimatePresence } from 'framer-motion';
-import { CircleDot, CircleCheck, Clock, XCircle, MessageSquare, AlertCircle, ChevronRight } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Reorder, useDragControls } from 'framer-motion';
+import { CircleDot, CircleCheck, Clock, XCircle, MessageSquare, AlertCircle, ChevronRight, GripVertical, Search } from 'lucide-react';
 import type { Issue, Status } from '../../lib/types';
 import { PRIORITY_CONFIG } from '../../lib/types';
 import { useIssueStore, useFilteredIssues } from '../../stores/issueStore';
@@ -22,23 +23,38 @@ function formatDate(ts: number): string {
   return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
 }
 
-function IssueRow({ issue }: { issue: Issue }) {
+function IssueRow({ issue, onDragEnd }: { issue: Issue; onDragEnd: () => void }) {
   const { selectedId, selectIssue } = useIssueStore();
   const selected = selectedId === issue.id;
   const pc = PRIORITY_CONFIG[issue.priority];
+  const controls = useDragControls();
 
   return (
-    <motion.button
-      layout
+    <Reorder.Item
+      value={issue}
+      dragListener={false}
+      dragControls={controls}
+      onDragEnd={onDragEnd}
       initial={{ opacity: 0, y: -8 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, x: -20 }}
       transition={{ duration: 0.18 }}
       onClick={() => selectIssue(selected ? null : issue.id)}
-      className={`w-full text-left px-5 py-4 flex gap-3.5 items-start border-b border-[var(--border)] transition-colors cursor-pointer group relative
+      className={`w-full text-left px-5 py-4 flex gap-2 items-start border-b border-[var(--border)] transition-colors cursor-pointer group relative
         ${selected ? 'bg-[var(--accent-soft)]' : 'hover:bg-white/[0.035]'}`}
     >
       {selected && <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-blue-500/80" />}
+
+      {/* Drag handle — only this starts a reorder, so row clicks still select. */}
+      <span
+        onPointerDown={e => { e.stopPropagation(); controls.start(e); }}
+        onClick={e => e.stopPropagation()}
+        className="mt-0.5 shrink-0 -ml-1.5 text-[var(--text-dim)] opacity-0 group-hover:opacity-60 hover:!opacity-100 cursor-grab active:cursor-grabbing touch-none transition-opacity"
+        title="Drag to reorder"
+      >
+        <GripVertical className="w-4 h-4" />
+      </span>
+
       <div className="mt-0.5 shrink-0">{STATUS_ICONS[issue.status]}</div>
 
       <div className="flex-1 min-w-0">
@@ -67,25 +83,40 @@ function IssueRow({ issue }: { issue: Issue }) {
       </div>
 
       <ChevronRight className={`w-4 h-4 shrink-0 mt-0.5 transition-transform text-[var(--text-dim)] opacity-0 group-hover:opacity-100 ${selected ? 'rotate-90 text-blue-400 opacity-100' : ''}`} />
-    </motion.button>
+    </Reorder.Item>
   );
 }
 
 export function IssueList() {
-  const { filter, setFilter, loading } = useIssueStore();
+  const { filter, setFilter, loading, reorderIssues } = useIssueStore();
   const issues = useFilteredIssues();
+
+  // Local mirror so dragging is snappy; resynced whenever the filtered set
+  // (membership or order) changes underneath us.
+  const [order, setOrder] = useState<Issue[]>(issues);
+  const orderRef = useRef(order);
+  orderRef.current = order;
+
+  useEffect(() => {
+    setOrder(issues);
+  }, [issues.map(i => i.id).join(',')]);
+
+  const persistOrder = () => reorderIssues(orderRef.current.map(i => i.id));
 
   return (
     <div className="flex flex-col h-full">
       {/* Search */}
       <div className="px-4 pt-4 pb-3">
-        <input
-          type="text"
-          placeholder="Search issues..."
-          value={filter.search}
-          onChange={e => setFilter({ search: e.target.value })}
-          className="w-full bg-white/[0.04] border border-[var(--border)] rounded-xl px-3.5 py-2.5 text-sm text-[var(--text-bright)] placeholder:text-[var(--text-dim)] outline-none focus:border-blue-500/40 focus:bg-white/[0.06] focus:ring-4 focus:ring-blue-500/10 transition-all"
-        />
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--text-dim)] pointer-events-none" />
+          <input
+            type="text"
+            placeholder="Search tasks…"
+            value={filter.search}
+            onChange={e => setFilter({ search: e.target.value })}
+            className="w-full bg-white/[0.04] border border-[var(--border)] rounded-xl pl-9 pr-3 py-2.5 text-sm text-[var(--text-bright)] placeholder:text-[var(--text-dim)] outline-none focus:border-blue-500/40 focus:bg-white/[0.06] focus:ring-4 focus:ring-blue-500/10 transition-all"
+          />
+        </div>
       </div>
 
       {/* Filters */}
@@ -106,17 +137,17 @@ export function IssueList() {
         {loading && (
           <div className="flex items-center justify-center h-20 text-slate-500 text-sm">Loading...</div>
         )}
-        {!loading && issues.length === 0 && (
+        {!loading && order.length === 0 && (
           <div className="flex flex-col items-center justify-center h-40 gap-2 text-slate-500">
             <AlertCircle className="w-8 h-8 opacity-30" />
             <span className="text-sm">No issues found</span>
           </div>
         )}
-        <AnimatePresence initial={false}>
-          {issues.map(issue => (
-            <IssueRow key={issue.id} issue={issue} />
+        <Reorder.Group axis="y" values={order} onReorder={setOrder} as="div">
+          {order.map(issue => (
+            <IssueRow key={issue.id} issue={issue} onDragEnd={persistOrder} />
           ))}
-        </AnimatePresence>
+        </Reorder.Group>
       </div>
     </div>
   );

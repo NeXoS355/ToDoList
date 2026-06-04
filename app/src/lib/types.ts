@@ -9,6 +9,9 @@ export interface Issue {
   status: Status;
   created_at: number;
   updated_at: number;
+  sort_order: number;
+  source: string | null;       // 'email' | 'outlook' | 'teams' | null (manual)
+  source_meta: string | null;  // JSON: { fromName, fromEmail, to, date, subject }
   labels?: Label[];
   comment_count?: number;
 }

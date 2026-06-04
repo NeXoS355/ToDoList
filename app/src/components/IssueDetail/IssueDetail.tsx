@@ -1,8 +1,9 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { useState, useRef } from 'react';
-import { X, Trash2, CircleDot, Clock, CircleCheck, XCircle, ChevronDown, Paperclip, FileText, Download } from 'lucide-react';
+import { X, Trash2, CircleDot, Clock, CircleCheck, XCircle, ChevronDown, Paperclip, FileText, Download, Mail } from 'lucide-react';
 import type { Status, Priority } from '../../lib/types';
 import { PRIORITY_CONFIG, STATUS_CONFIG, formatBytes } from '../../lib/types';
+import { readEmailMeta } from '../../lib/emailParse';
 import { useIssueStore } from '../../stores/issueStore';
 import { CommentBox } from '../CommentBox/CommentBox';
 
@@ -159,6 +160,37 @@ export function IssueDetail() {
               <Trash2 className="w-4 h-4" />
             </button>
           </div>
+
+          {/* Email source */}
+          {(() => {
+            const meta = readEmailMeta(issue.source_meta);
+            if (!meta) return null;
+            return (
+              <div className="px-8 pt-5">
+                <div className="flex items-start gap-3 rounded-xl border border-blue-500/25 bg-gradient-to-br from-blue-500/[0.07] to-violet-500/[0.05] px-3.5 py-3 ring-1 ring-inset ring-white/5">
+                  <div className="shrink-0 w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center text-white text-sm font-semibold shadow-lg shadow-blue-500/20">
+                    {(meta.fromName || meta.fromEmail || '?').trim().charAt(0).toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-blue-300/80">
+                      <Mail className="w-3 h-3" /> From email
+                    </div>
+                    <div className="text-sm text-[var(--text-bright)] font-medium truncate mt-0.5">
+                      {meta.fromName || meta.fromEmail || 'Unknown sender'}
+                      {meta.fromName && meta.fromEmail && (
+                        <span className="text-[var(--text-dim)] font-normal"> · {meta.fromEmail}</span>
+                      )}
+                    </div>
+                    {meta.date && (
+                      <div className="flex items-center gap-1.5 text-xs text-[var(--text-dim)] mt-1">
+                        <Clock className="w-3 h-3" /> {meta.date}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Body */}
           <div className="px-8 py-6 flex-1">

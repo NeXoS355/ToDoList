@@ -25,9 +25,11 @@ interface IssueStore {
   loadIssues: () => Promise<void>;
   loadLabels: () => Promise<void>;
   selectIssue: (id: string | null) => Promise<void>;
-  createIssue: (data: { title: string; body: string; priority: Priority; labelIds?: string[] }) => Promise<string>;
+  createIssue: (data: { title: string; body: string; priority: Priority; labelIds?: string[]; source?: string | null; sourceMeta?: Record<string, unknown> | null }) => Promise<string>;
   updateIssue: (id: string, data: Partial<Pick<Issue, 'title' | 'body' | 'priority' | 'status'>>) => Promise<void>;
   deleteIssue: (id: string) => Promise<void>;
+  reorderIssues: (visibleOrderedIds: string[]) => Promise<void>;
+  setIssueLabels: (issueId: string, labelIds: string[]) => Promise<void>;
   addComment: (issueId: string, body: string) => Promise<void>;
   deleteComment: (id: string) => Promise<void>;
   addAttachment: (issueId: string, file: File) => Promise<void>;
@@ -84,6 +86,24 @@ export const useIssueStore = create<IssueStore>((set, get) => ({
   deleteIssue: async (id) => {
     await db.deleteIssue(id);
     if (get().selectedId === id) set({ selectedId: null, comments: [] });
+    await get().loadIssues();
+  },
+
+  reorderIssues: async (visibleOrderedIds) => {
+    // The drag only reorders the *visible* (filtered) subset. Splice that new
+    // order back into the full list — keeping hidden issues in their slots —
+    // so the persisted sort_order stays coherent across filters.
+    const byId = new Map(get().issues.map(i => [i.id, i]));
+    const queue = [...visibleOrderedIds];
+    const visible = new Set(visibleOrderedIds);
+    const newIssues = get().issues.map(i => (visible.has(i.id) ? byId.get(queue.shift()!)! : i));
+    set({ issues: newIssues }); // optimistic
+    await db.reorderIssues(newIssues.map(i => i.id));
+    await get().loadIssues();
+  },
+
+  setIssueLabels: async (issueId, labelIds) => {
+    await db.setIssueLabels(issueId, labelIds);
     await get().loadIssues();
   },
 
