@@ -1,2 +1,7 @@
 onlyBuiltDependencies:
   - esbuild
+
+# Quarantaene: neue Paket-Versionen erst nach 24h (1440 min) akzeptieren.
+# Kompromittierte Releases werden meist binnen Stunden entdeckt + gezogen,
+# bevor sie hier ankommen. Schutz gegen Supply-Chain-Attacken.
+minimumReleaseAge: 1440
