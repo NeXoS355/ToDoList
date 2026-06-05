@@ -5,3 +5,6 @@ onlyBuiltDependencies:
 # Kompromittierte Releases werden meist binnen Stunden entdeckt + gezogen,
 # bevor sie hier ankommen. Schutz gegen Supply-Chain-Attacken.
 minimumReleaseAge: 1440
+
+allowBuilds:
+  esbuild: false
