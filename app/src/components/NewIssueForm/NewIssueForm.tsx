@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Paperclip, FileText, Check, Mail, Clock } from 'lucide-react';
+import { X, Paperclip, FileText, Check, Mail, Clock, Plus } from 'lucide-react';
 import type { Priority, Label } from '../../lib/types';
 import { PRIORITY_CONFIG, formatBytes } from '../../lib/types';
 import { useIssueStore } from '../../stores/issueStore';
@@ -14,11 +14,12 @@ interface Props {
 }
 
 export function NewIssueForm({ onClose, initialTitle = '', initialBody = '', initialMeta = null }: Props) {
-  const { createIssue, updateIssue, setIssueLabels, addAttachment, selectIssue, labels } = useIssueStore();
+  const { createIssue, updateIssue, setIssueLabels, addAttachment, selectIssue, labels, createLabel } = useIssueStore();
   const [title, setTitle] = useState(initialTitle);
   const [body, setBody] = useState(initialBody);
   const [priority, setPriority] = useState<Priority>('medium');
   const [selectedLabels, setSelectedLabels] = useState<string[]>([]);
+  const [newLabel, setNewLabel] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [createdId, setCreatedId] = useState<string | null>(null);
   const [emailMeta, setEmailMeta] = useState<EmailMeta | null>(initialMeta);
@@ -78,6 +79,16 @@ export function NewIssueForm({ onClose, initialTitle = '', initialBody = '', ini
     setSelectedLabels(prev => prev.includes(id) ? prev.filter(l => l !== id) : [...prev, id]);
   };
 
+  // Create a label inline and auto-select it on the current draft.
+  const handleCreateLabel = async () => {
+    const name = newLabel.trim();
+    if (!name) return;
+    const label = await createLabel(name);
+    if (!label) return; // duplicate/error — toast already shown
+    setSelectedLabels(prev => [...prev, label.id]);
+    setNewLabel('');
+  };
+
   // Enter on the title: commit the task immediately and drop into the
   // description so details are optional, not blocking.
   const handleTitleEnter = async () => {
@@ -85,8 +96,9 @@ export function NewIssueForm({ onClose, initialTitle = '', initialBody = '', ini
     if (!title.trim()) return;
     setBusy(true);
     const id = await createIssue({ title: title.trim(), body, priority, labelIds: selectedLabels, ...sourceArgs });
-    setCreatedId(id);
     setBusy(false);
+    if (!id) return; // create failed — toast already shown, keep the form open
+    setCreatedId(id);
     textareaRef.current?.focus();
   };
 
@@ -98,6 +110,7 @@ export function NewIssueForm({ onClose, initialTitle = '', initialBody = '', ini
     if (!id) {
       if (!title.trim()) { onClose(); return; }
       id = await createIssue({ title: title.trim(), body, priority, labelIds: selectedLabels, ...sourceArgs });
+      if (!id) { setBusy(false); return; } // create failed — keep form open
     } else {
       await updateIssue(id, { title: title.trim() || '(untitled)', body, priority });
       await setIssueLabels(id, selectedLabels);
@@ -126,7 +139,7 @@ export function NewIssueForm({ onClose, initialTitle = '', initialBody = '', ini
         initial={{ scale: 0.96, opacity: 0, y: 12 }}
         animate={{ scale: 1, opacity: 1, y: 0 }}
         exit={{ scale: 0.96, opacity: 0, y: 12 }}
-        transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+        transition={{ type: 'spring', stiffness: 600, damping: 34 }}
         className="w-full max-w-2xl bg-[var(--surface)] border border-[var(--border-strong)] rounded-2xl shadow-2xl shadow-black/50 ring-1 ring-white/5"
         onClick={e => e.stopPropagation()}
       >
@@ -249,28 +262,46 @@ export function NewIssueForm({ onClose, initialTitle = '', initialBody = '', ini
           </div>
 
           {/* Labels */}
-          {labels.length > 0 && (
-            <div>
-              <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-dim)] mb-2 block">Labels</label>
-              <div className="flex gap-2 flex-wrap">
-                {labels.map((l: Label) => (
-                  <button
-                    key={l.id}
-                    type="button"
-                    onClick={() => toggleLabel(l.id)}
-                    className={`text-xs px-2 py-0.5 rounded-full border transition-all`}
-                    style={{
-                      color: selectedLabels.includes(l.id) ? l.color : '#64748b',
-                      borderColor: selectedLabels.includes(l.id) ? `${l.color}60` : 'rgba(255,255,255,0.1)',
-                      backgroundColor: selectedLabels.includes(l.id) ? `${l.color}20` : 'transparent',
-                    }}
-                  >
-                    {l.name}
-                  </button>
-                ))}
+          <div>
+            <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-dim)] mb-2 block">Labels</label>
+            <div className="flex gap-2 flex-wrap items-center">
+              {labels.map((l: Label) => (
+                <button
+                  key={l.id}
+                  type="button"
+                  onClick={() => toggleLabel(l.id)}
+                  className={`text-xs px-2 py-0.5 rounded-full border transition-all`}
+                  style={{
+                    color: selectedLabels.includes(l.id) ? l.color : '#64748b',
+                    borderColor: selectedLabels.includes(l.id) ? `${l.color}60` : 'rgba(255,255,255,0.1)',
+                    backgroundColor: selectedLabels.includes(l.id) ? `${l.color}20` : 'transparent',
+                  }}
+                >
+                  {l.name}
+                </button>
+              ))}
+              {/* Inline create — Enter or the + button adds and selects it. */}
+              <div className="flex items-center gap-1 rounded-full border border-dashed border-white/15 focus-within:border-blue-500/40 pl-2.5 pr-1 py-0.5 transition-colors">
+                <input
+                  type="text"
+                  value={newLabel}
+                  onChange={e => setNewLabel(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleCreateLabel(); } }}
+                  placeholder="New label"
+                  className="text-xs bg-transparent text-[var(--text)] placeholder:text-[var(--text-dim)] outline-none w-20"
+                />
+                <button
+                  type="button"
+                  onClick={handleCreateLabel}
+                  disabled={!newLabel.trim()}
+                  title="Create label"
+                  className="shrink-0 text-[var(--text-dim)] hover:text-emerald-400 disabled:opacity-30 disabled:hover:text-[var(--text-dim)] transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
               </div>
             </div>
-          )}
+          </div>
 
           {/* Pending attachments */}
           {files.length > 0 && (

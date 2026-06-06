@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
-import { Reorder, useDragControls } from 'framer-motion';
-import { CircleDot, CircleCheck, Clock, XCircle, MessageSquare, AlertCircle, ChevronRight, GripVertical, Search } from 'lucide-react';
-import type { Issue, Status } from '../../lib/types';
+import { AnimatePresence, motion } from 'framer-motion';
+import { CircleDot, CircleCheck, Clock, XCircle, MessageSquare, AlertCircle, ChevronRight, Search } from 'lucide-react';
+import type { Status, Issue } from '../../lib/types';
 import { PRIORITY_CONFIG } from '../../lib/types';
 import { useIssueStore, useFilteredIssues } from '../../stores/issueStore';
 
@@ -10,6 +9,13 @@ const STATUS_ICONS: Record<Status, React.ReactNode> = {
   in_progress: <Clock className="w-4 h-4 text-blue-400" />,
   done:        <CircleCheck className="w-4 h-4 text-slate-500" />,
   cancelled:   <XCircle className="w-4 h-4 text-red-400/60" />,
+};
+
+const STATUS_CYCLE: Record<Status, Status> = {
+  open:        'in_progress',
+  in_progress: 'done',
+  done:        'open',
+  cancelled:   'open',
 };
 
 function formatDate(ts: number): string {
@@ -23,39 +29,38 @@ function formatDate(ts: number): string {
   return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
 }
 
-function IssueRow({ issue, onDragEnd }: { issue: Issue; onDragEnd: () => void }) {
-  const { selectedId, selectIssue } = useIssueStore();
+function IssueRow({ issue }: { issue: Issue }) {
+  const { selectedId, selectIssue, updateIssue } = useIssueStore();
   const selected = selectedId === issue.id;
   const pc = PRIORITY_CONFIG[issue.priority];
-  const controls = useDragControls();
+
+  // Click the status icon to cycle open → in_progress → done → open without
+  // opening the issue. (cancelled re-enters the cycle at open.)
+  const cycleStatus = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    updateIssue(issue.id, { status: STATUS_CYCLE[issue.status] });
+  };
 
   return (
-    <Reorder.Item
-      value={issue}
-      dragListener={false}
-      dragControls={controls}
-      onDragEnd={onDragEnd}
+    <motion.div
+      layout
       initial={{ opacity: 0, y: -8 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, x: -20 }}
-      transition={{ duration: 0.18 }}
+      transition={{ duration: 0.12 }}
       onClick={() => selectIssue(selected ? null : issue.id)}
       className={`w-full text-left px-5 py-4 flex gap-2 items-start border-b border-[var(--border)] transition-colors cursor-pointer group relative
         ${selected ? 'bg-[var(--accent-soft)]' : 'hover:bg-white/[0.035]'}`}
     >
       {selected && <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-blue-500/80" />}
 
-      {/* Drag handle — only this starts a reorder, so row clicks still select. */}
-      <span
-        onPointerDown={e => { e.stopPropagation(); controls.start(e); }}
-        onClick={e => e.stopPropagation()}
-        className="mt-0.5 shrink-0 -ml-1.5 text-[var(--text-dim)] opacity-0 group-hover:opacity-60 hover:!opacity-100 cursor-grab active:cursor-grabbing touch-none transition-opacity"
-        title="Drag to reorder"
+      <button
+        onClick={cycleStatus}
+        title={`Set to ${STATUS_CYCLE[issue.status].replace('_', ' ')}`}
+        className="mt-0.5 shrink-0 -m-1 p-1 rounded-md hover:bg-white/[0.08] transition-colors"
       >
-        <GripVertical className="w-4 h-4" />
-      </span>
-
-      <div className="mt-0.5 shrink-0">{STATUS_ICONS[issue.status]}</div>
+        {STATUS_ICONS[issue.status]}
+      </button>
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
@@ -83,25 +88,14 @@ function IssueRow({ issue, onDragEnd }: { issue: Issue; onDragEnd: () => void })
       </div>
 
       <ChevronRight className={`w-4 h-4 shrink-0 mt-0.5 transition-transform text-[var(--text-dim)] opacity-0 group-hover:opacity-100 ${selected ? 'rotate-90 text-blue-400 opacity-100' : ''}`} />
-    </Reorder.Item>
+    </motion.div>
   );
 }
 
 export function IssueList() {
-  const { filter, setFilter, loading, reorderIssues } = useIssueStore();
+  const { filter, setFilter, loading } = useIssueStore();
+  // Already sorted (status → priority → created_at) by the store; render as-is.
   const issues = useFilteredIssues();
-
-  // Local mirror so dragging is snappy; resynced whenever the filtered set
-  // (membership or order) changes underneath us.
-  const [order, setOrder] = useState<Issue[]>(issues);
-  const orderRef = useRef(order);
-  orderRef.current = order;
-
-  useEffect(() => {
-    setOrder(issues);
-  }, [issues.map(i => i.id).join(',')]);
-
-  const persistOrder = () => reorderIssues(orderRef.current.map(i => i.id));
 
   return (
     <div className="flex flex-col h-full">
@@ -137,17 +131,17 @@ export function IssueList() {
         {loading && (
           <div className="flex items-center justify-center h-20 text-slate-500 text-sm">Loading...</div>
         )}
-        {!loading && order.length === 0 && (
+        {!loading && issues.length === 0 && (
           <div className="flex flex-col items-center justify-center h-40 gap-2 text-slate-500">
             <AlertCircle className="w-8 h-8 opacity-30" />
             <span className="text-sm">No issues found</span>
           </div>
         )}
-        <Reorder.Group axis="y" values={order} onReorder={setOrder} as="div">
-          {order.map(issue => (
-            <IssueRow key={issue.id} issue={issue} onDragEnd={persistOrder} />
+        <AnimatePresence initial={false}>
+          {issues.map(issue => (
+            <IssueRow key={issue.id} issue={issue} />
           ))}
-        </Reorder.Group>
+        </AnimatePresence>
       </div>
     </div>
   );

@@ -1,14 +1,16 @@
 import { useEffect, useState, useCallback } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
+import { getVersion } from '@tauri-apps/api/app';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { listen } from '@tauri-apps/api/event';
-import { RefreshCw, MailPlus } from 'lucide-react';
+import { MailPlus } from 'lucide-react';
 import { useIssueStore } from './stores/issueStore';
 import { IssueList } from './components/IssueList/IssueList';
 import { IssueDetail } from './components/IssueDetail/IssueDetail';
 import { NewIssueForm } from './components/NewIssueForm/NewIssueForm';
 import { QuickComposer } from './components/QuickComposer/QuickComposer';
+import { ErrorToast } from './components/ErrorToast/ErrorToast';
 import { parseEmailFile, base64ToBytes, guessTitle, type EmailMeta, type ParsedEmail } from './lib/emailParse';
 
 interface Draft {
@@ -24,6 +26,11 @@ export default function App() {
   const [showNew, setShowNew] = useState(false);
   const [draft, setDraft] = useState<Draft>({ title: '', body: '', meta: null });
   const [dragging, setDragging] = useState(false);
+  const [version, setVersion] = useState('');
+
+  useEffect(() => {
+    getVersion().then(setVersion).catch(() => {});
+  }, []);
 
   // Single entry point for the full dialog — optionally pre-seeded with a title
   // (inline composer escalation) or a whole email draft (dropped .eml/.msg).
@@ -110,10 +117,6 @@ export default function App() {
         <span className="text-xs text-[var(--text-dim)] bg-white/[0.04] px-2.5 py-1 rounded-full font-medium">{openCount} open</span>
         <div className="flex-1" />
 
-        <button onClick={loadIssues} title="Refresh" className="text-[var(--text-dim)] hover:text-[var(--text-bright)] transition-colors p-2 rounded-lg hover:bg-white/[0.05]">
-          <RefreshCw className="w-4 h-4" />
-        </button>
-
         {/* Primary action: quick add (Esc/⌘↵ → full dialog) */}
         <QuickComposer onAddDetails={openNewIssue} />
       </header>
@@ -154,6 +157,13 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      {/* Subtle version tag, bottom-right */}
+      {version && (
+        <span className="fixed bottom-2 right-3 z-50 text-[10px] text-[var(--text-dim)] opacity-40 hover:opacity-70 transition-opacity pointer-events-none select-none tabular-nums">
+          v{version}
+        </span>
+      )}
+
       <AnimatePresence>
         {showNew && (
           <NewIssueForm
@@ -164,6 +174,8 @@ export default function App() {
           />
         )}
       </AnimatePresence>
+
+      <ErrorToast />
     </div>
   );
 }

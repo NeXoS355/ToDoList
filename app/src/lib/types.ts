@@ -9,7 +9,6 @@ export interface Issue {
   status: Status;
   created_at: number;
   updated_at: number;
-  sort_order: number;
   source: string | null;       // 'email' | 'outlook' | 'teams' | null (manual)
   source_meta: string | null;  // JSON: { fromName, fromEmail, to, date, subject }
   labels?: Label[];
@@ -29,7 +28,7 @@ export interface Attachment {
   comment_id: string | null;
   filename: string;
   mime_type: string | null;
-  data: string | null; // base64-encoded file bytes
+  rel_path: string | null; // path under appDataDir/attachments
   size_bytes: number | null;
   created_at: number;
 }

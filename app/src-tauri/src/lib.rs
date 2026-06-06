@@ -28,6 +28,60 @@ fn read_file_base64(path: String) -> Result<String, String> {
     Ok(STANDARD.encode(bytes))
 }
 
+/// The on-disk directory for attachment bytes: `<appDataDir>/attachments`.
+fn attachments_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("attachments");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+/// Reject anything that could escape the attachments dir. `rel_path` is always
+/// an id we generated, but this is cheap defense in depth.
+fn safe_rel(rel: &str) -> Result<(), String> {
+    if rel.is_empty() || rel.contains('/') || rel.contains('\\') || rel.contains("..") {
+        return Err("invalid attachment path".into());
+    }
+    Ok(())
+}
+
+/// Decode base64 file bytes and write them to `<appData>/attachments/<id>`.
+/// Returns the stored relative path (the id). Storing bytes on disk keeps the
+/// SQLite DB small and avoids loading whole files into memory to list them.
+#[tauri::command]
+fn save_attachment(app: tauri::AppHandle, id: String, data: String) -> Result<String, String> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    safe_rel(&id)?;
+    let bytes = STANDARD.decode(data.as_bytes()).map_err(|e| e.to_string())?;
+    let path = attachments_dir(&app)?.join(&id);
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
+/// Copy a stored attachment to a user-chosen destination (from the save dialog).
+#[tauri::command]
+fn export_attachment(app: tauri::AppHandle, rel_path: String, dest: String) -> Result<(), String> {
+    safe_rel(&rel_path)?;
+    let src = attachments_dir(&app)?.join(&rel_path);
+    std::fs::copy(&src, &dest).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Remove an attachment's bytes from disk. Missing file is not an error so a
+/// stale row can always be cleaned up.
+#[tauri::command]
+fn delete_attachment_file(app: tauri::AppHandle, rel_path: String) -> Result<(), String> {
+    safe_rel(&rel_path)?;
+    let path = attachments_dir(&app)?.join(&rel_path);
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
@@ -75,41 +129,25 @@ pub fn run() {
 
     builder
         .plugin(tauri_plugin_opener::init())
-        .plugin(
-            tauri_plugin_sql::Builder::default()
-                .add_migrations(
-                    "sqlite:todolist.db",
-                    vec![
-                        tauri_plugin_sql::Migration {
-                            version: 1,
-                            description: "initial schema",
-                            sql: include_str!("../migrations/001_initial.sql"),
-                            kind: tauri_plugin_sql::MigrationKind::Up,
-                        },
-                        tauri_plugin_sql::Migration {
-                            version: 2,
-                            description: "manual sort order",
-                            sql: include_str!("../migrations/002_sort_order.sql"),
-                            kind: tauri_plugin_sql::MigrationKind::Up,
-                        },
-                        tauri_plugin_sql::Migration {
-                            version: 3,
-                            description: "email source metadata",
-                            sql: include_str!("../migrations/003_email_source.sql"),
-                            kind: tauri_plugin_sql::MigrationKind::Up,
-                        },
-                        tauri_plugin_sql::Migration {
-                            version: 4,
-                            description: "settings key-value store",
-                            sql: include_str!("../migrations/004_settings.sql"),
-                            kind: tauri_plugin_sql::MigrationKind::Up,
-                        },
-                    ],
-                )
-                .build(),
-        )
-        .invoke_handler(tauri::generate_handler![set_open_count, read_file_base64, launched_quick_add])
+        .plugin(tauri_plugin_dialog::init())
+        // No migrations — the frontend creates the schema on first connect.
+        .plugin(tauri_plugin_sql::Builder::default().build())
+        .invoke_handler(tauri::generate_handler![
+            set_open_count,
+            read_file_base64,
+            launched_quick_add,
+            save_attachment,
+            export_attachment,
+            delete_attachment_file
+        ])
         .setup(|app| {
+            // The DB lives at app_data_dir/todolist.db (an absolute path passed
+            // from JS). The sql plugin won't create that dir for an absolute
+            // path, so ensure it exists before the first connection.
+            if let Ok(dir) = app.path().app_data_dir() {
+                let _ = std::fs::create_dir_all(&dir);
+            }
+
             // Tray icon: reuses the app icon, exposes a Show/Quit menu, and is
             // kept alive across window closes so the app lives in the background.
             let show = MenuItem::with_id(app, "show", "Show ToDoList", true, None::<&str>)?;

@@ -1,7 +1,30 @@
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
+import { invoke } from '@tauri-apps/api/core';
+import { save } from '@tauri-apps/plugin-dialog';
 import type { Issue, Comment, Label, Attachment, Priority, Status } from '../lib/types';
+import { formatBytes } from '../lib/types';
 import * as db from '../lib/db';
+
+// Hard cap on attachment size — bytes go to disk, but an unbounded file would
+// still spike memory during the base64 round-trip to the Rust writer.
+const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+
+// Keep the in-memory list in the same order as the SQL query (db.getIssues),
+// so client-side patches re-sort without a reload: status → priority → newest.
+const STATUS_RANK: Record<Status, number> = { in_progress: 0, open: 1, done: 2, cancelled: 3 };
+const PRIORITY_RANK: Record<Priority, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+
+function sortIssues(list: Issue[]): Issue[] {
+  return [...list].sort((a, b) =>
+    (STATUS_RANK[a.status] - STATUS_RANK[b.status]) ||
+    (PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]) ||
+    (b.created_at - a.created_at)
+  );
+}
+
+// Colors handed to newly created labels, cycled by current label count.
+const LABEL_PALETTE = ['#ef4444', '#f97316', '#eab308', '#10b981', '#3b82f6', '#8b5cf6', '#ec4899', '#14b8a6'];
 
 /** Read a File into a bare base64 string (strips the `data:...;base64,` prefix). */
 function fileToBase64(file: File): Promise<string> {
@@ -20,16 +43,18 @@ interface IssueStore {
   attachments: Attachment[];
   labels: Label[];
   loading: boolean;
+  error: string | null;
   filter: { status: Status | 'all'; priority: Priority | 'all'; search: string };
 
+  clearError: () => void;
   loadIssues: () => Promise<void>;
   loadLabels: () => Promise<void>;
   selectIssue: (id: string | null) => Promise<void>;
-  createIssue: (data: { title: string; body: string; priority: Priority; labelIds?: string[]; source?: string | null; sourceMeta?: Record<string, unknown> | null }) => Promise<string>;
+  createIssue: (data: { title: string; body: string; priority: Priority; labelIds?: string[]; source?: string | null; sourceMeta?: Record<string, unknown> | null }) => Promise<string | null>;
   updateIssue: (id: string, data: Partial<Pick<Issue, 'title' | 'body' | 'priority' | 'status'>>) => Promise<void>;
   deleteIssue: (id: string) => Promise<void>;
-  reorderIssues: (visibleOrderedIds: string[]) => Promise<void>;
   setIssueLabels: (issueId: string, labelIds: string[]) => Promise<void>;
+  createLabel: (name: string) => Promise<Label | null>;
   addComment: (issueId: string, body: string) => Promise<void>;
   deleteComment: (id: string) => Promise<void>;
   addAttachment: (issueId: string, file: File) => Promise<void>;
@@ -38,116 +63,191 @@ interface IssueStore {
   setFilter: (f: Partial<IssueStore['filter']>) => void;
 }
 
-export const useIssueStore = create<IssueStore>((set, get) => ({
-  issues: [],
-  selectedId: null,
-  comments: [],
-  attachments: [],
-  labels: [],
-  loading: false,
-  filter: { status: 'open', priority: 'all', search: '' },
+export const useIssueStore = create<IssueStore>((set, get) => {
+  // Surface any thrown DB/IO error as a toast instead of a silent unhandled
+  // rejection. Returns nothing — callers that need a value get null on failure.
+  const fail = (e: unknown) => set({ error: e instanceof Error ? e.message : String(e) });
 
-  loadIssues: async () => {
-    set({ loading: true });
-    const issues = await db.getIssues();
-    set({ issues, loading: false });
-  },
+  return {
+    issues: [],
+    selectedId: null,
+    comments: [],
+    attachments: [],
+    labels: [],
+    loading: false,
+    error: null,
+    filter: { status: 'open', priority: 'all', search: '' },
 
-  loadLabels: async () => {
-    const labels = await db.getLabels();
-    set({ labels });
-  },
+    clearError: () => set({ error: null }),
 
-  selectIssue: async (id) => {
-    set({ selectedId: id });
-    if (id) {
-      const [comments, attachments] = await Promise.all([db.getComments(id), db.getAttachments(id)]);
-      set({ comments, attachments });
-    } else {
-      set({ comments: [], attachments: [] });
-    }
-  },
+    loadIssues: async () => {
+      set({ loading: true });
+      try {
+        const issues = await db.getIssues();
+        set({ issues, loading: false });
+      } catch (e) {
+        fail(e);
+        set({ loading: false });
+      }
+    },
 
-  createIssue: async (data) => {
-    const issue = await db.createIssue(data);
-    await get().loadIssues();
-    return issue.id;
-  },
+    loadLabels: async () => {
+      try {
+        set({ labels: await db.getLabels() });
+      } catch (e) {
+        fail(e);
+      }
+    },
 
-  updateIssue: async (id, data) => {
-    await db.updateIssue(id, data);
-    await get().loadIssues();
-    if (get().selectedId === id) {
-      const comments = await db.getComments(id);
-      set({ comments });
-    }
-  },
+    selectIssue: async (id) => {
+      set({ selectedId: id });
+      try {
+        if (id) {
+          const [comments, attachments] = await Promise.all([db.getComments(id), db.getAttachments(id)]);
+          set({ comments, attachments });
+        } else {
+          set({ comments: [], attachments: [] });
+        }
+      } catch (e) {
+        fail(e);
+      }
+    },
 
-  deleteIssue: async (id) => {
-    await db.deleteIssue(id);
-    if (get().selectedId === id) set({ selectedId: null, comments: [] });
-    await get().loadIssues();
-  },
+    createIssue: async (data) => {
+      try {
+        const issue = await db.createIssue(data);
+        set(s => ({ issues: sortIssues([issue, ...s.issues]) }));
+        return issue.id;
+      } catch (e) {
+        fail(e);
+        return null;
+      }
+    },
 
-  reorderIssues: async (visibleOrderedIds) => {
-    // The drag only reorders the *visible* (filtered) subset. Splice that new
-    // order back into the full list — keeping hidden issues in their slots —
-    // so the persisted sort_order stays coherent across filters.
-    const byId = new Map(get().issues.map(i => [i.id, i]));
-    const queue = [...visibleOrderedIds];
-    const visible = new Set(visibleOrderedIds);
-    const newIssues = get().issues.map(i => (visible.has(i.id) ? byId.get(queue.shift()!)! : i));
-    set({ issues: newIssues }); // optimistic
-    await db.reorderIssues(newIssues.map(i => i.id));
-    await get().loadIssues();
-  },
+    updateIssue: async (id, data) => {
+      try {
+        await db.updateIssue(id, data);
+        // status/priority changes move the row, so re-sort after patching.
+        const now = Date.now();
+        set(s => ({ issues: sortIssues(s.issues.map(i => (i.id === id ? { ...i, ...data, updated_at: now } : i))) }));
+      } catch (e) {
+        fail(e);
+      }
+    },
 
-  setIssueLabels: async (issueId, labelIds) => {
-    await db.setIssueLabels(issueId, labelIds);
-    await get().loadIssues();
-  },
+    deleteIssue: async (id) => {
+      try {
+        await db.deleteIssue(id);
+        set(s => ({
+          issues: s.issues.filter(i => i.id !== id),
+          ...(s.selectedId === id ? { selectedId: null, comments: [], attachments: [] } : {}),
+        }));
+      } catch (e) {
+        fail(e);
+      }
+    },
 
-  addComment: async (issueId, body) => {
-    await db.addComment(issueId, body);
-    const comments = await db.getComments(issueId);
-    await get().loadIssues();
-    set({ comments });
-  },
+    setIssueLabels: async (issueId, labelIds) => {
+      try {
+        await db.setIssueLabels(issueId, labelIds);
+        // Resolve the ids against the loaded label set and patch the row.
+        const labelById = new Map(get().labels.map(l => [l.id, l]));
+        const newLabels = labelIds.map(id => labelById.get(id)).filter((l): l is Label => !!l);
+        set(s => ({ issues: s.issues.map(i => (i.id === issueId ? { ...i, labels: newLabels } : i)) }));
+      } catch (e) {
+        fail(e);
+      }
+    },
 
-  deleteComment: async (id) => {
-    await db.deleteComment(id);
-    const issueId = get().selectedId;
-    if (issueId) {
-      const comments = await db.getComments(issueId);
-      set({ comments });
-    }
-  },
+    createLabel: async (name) => {
+      const trimmed = name.trim();
+      if (!trimmed) return null;
+      const color = LABEL_PALETTE[get().labels.length % LABEL_PALETTE.length];
+      try {
+        const label = await db.createLabel(trimmed, color);
+        set(s => ({ labels: [...s.labels, label].sort((a, b) => a.name.localeCompare(b.name)) }));
+        return label;
+      } catch (e) {
+        fail(e);
+        return null;
+      }
+    },
 
-  addAttachment: async (issueId, file) => {
-    const base64 = await fileToBase64(file);
-    await db.addAttachment({ issueId, filename: file.name, mimeType: file.type || null, base64, size: file.size });
-    if (get().selectedId === issueId) set({ attachments: await db.getAttachments(issueId) });
-  },
+    addComment: async (issueId, body) => {
+      try {
+        await db.addComment(issueId, body);
+        const comments = await db.getComments(issueId);
+        const now = Date.now();
+        set(s => ({
+          comments,
+          issues: s.issues.map(i => (i.id === issueId ? { ...i, comment_count: (i.comment_count ?? 0) + 1, updated_at: now } : i)),
+        }));
+      } catch (e) {
+        fail(e);
+      }
+    },
 
-  deleteAttachment: async (id) => {
-    await db.deleteAttachment(id);
-    const issueId = get().selectedId;
-    if (issueId) set({ attachments: await db.getAttachments(issueId) });
-  },
+    deleteComment: async (id) => {
+      try {
+        await db.deleteComment(id);
+        const issueId = get().selectedId;
+        if (issueId) {
+          const comments = await db.getComments(issueId);
+          set(s => ({
+            comments,
+            issues: s.issues.map(i => (i.id === issueId ? { ...i, comment_count: Math.max(0, (i.comment_count ?? 0) - 1) } : i)),
+          }));
+        }
+      } catch (e) {
+        fail(e);
+      }
+    },
 
-  downloadAttachment: async (id) => {
-    const att = await db.getAttachmentData(id);
-    if (!att?.data) return;
-    const a = document.createElement('a');
-    a.href = `data:${att.mime_type ?? 'application/octet-stream'};base64,${att.data}`;
-    a.download = att.filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-  },
+    addAttachment: async (issueId, file) => {
+      try {
+        if (file.size > MAX_ATTACHMENT_BYTES) {
+          set({ error: `"${file.name}" is too large (max ${formatBytes(MAX_ATTACHMENT_BYTES)}).` });
+          return;
+        }
+        // Write bytes to disk via Rust, store only the returned path in the DB.
+        const id = crypto.randomUUID();
+        const base64 = await fileToBase64(file);
+        const relPath = await invoke<string>('save_attachment', { id, data: base64 });
+        await db.addAttachment({ id, issueId, filename: file.name, mimeType: file.type || null, relPath, size: file.size });
+        if (get().selectedId === issueId) set({ attachments: await db.getAttachments(issueId) });
+      } catch (e) {
+        fail(e);
+      }
+    },
 
-  setFilter: (f) => set(s => ({ filter: { ...s.filter, ...f } })),
-}));
+    deleteAttachment: async (id) => {
+      try {
+        const att = await db.getAttachmentData(id);
+        await db.deleteAttachment(id);
+        if (att?.rel_path) await invoke('delete_attachment_file', { relPath: att.rel_path });
+        const issueId = get().selectedId;
+        if (issueId) set({ attachments: await db.getAttachments(issueId) });
+      } catch (e) {
+        fail(e);
+      }
+    },
+
+    downloadAttachment: async (id) => {
+      try {
+        const att = await db.getAttachmentData(id);
+        if (!att?.rel_path) return;
+        // Pick a destination, then copy the stored file there (Rust).
+        const dest = await save({ defaultPath: att.filename });
+        if (!dest) return; // dialog cancelled
+        await invoke('export_attachment', { relPath: att.rel_path, dest });
+      } catch (e) {
+        fail(e);
+      }
+    },
+
+    setFilter: (f) => set(s => ({ filter: { ...s.filter, ...f } })),
+  };
+});
 
 export function useFilteredIssues() {
   return useIssueStore(
@@ -155,7 +255,10 @@ export function useFilteredIssues() {
       s.issues.filter(issue => {
         if (s.filter.status !== 'all' && issue.status !== s.filter.status) return false;
         if (s.filter.priority !== 'all' && issue.priority !== s.filter.priority) return false;
-        if (s.filter.search && !issue.title.toLowerCase().includes(s.filter.search.toLowerCase())) return false;
+        if (s.filter.search) {
+          const q = s.filter.search.toLowerCase();
+          if (!issue.title.toLowerCase().includes(q) && !issue.body.toLowerCase().includes(q)) return false;
+        }
         return true;
       })
     )

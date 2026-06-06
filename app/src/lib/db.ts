@@ -1,10 +1,23 @@
 import Database from '@tauri-apps/plugin-sql';
+import { appDataDir, join } from '@tauri-apps/api/path';
+import schema from './schema.sql?raw';
 import type { Issue, Comment, Label, Attachment } from './types';
 
 let db: Awaited<ReturnType<typeof Database.load>> | null = null;
 
 async function getDb() {
-  if (!db) db = await Database.load('sqlite:todolist.db');
+  if (!db) {
+    // Absolute path in app_data_dir (next to attachments/).
+    const path = await join(await appDataDir(), 'todolist.db');
+    const conn = await Database.load(`sqlite:${path}`);
+    // Initialize the schema directly — no migrations. Idempotent, so running
+    // it on every startup is safe.
+    for (const stmt of schema.split(';')) {
+      const s = stmt.trim();
+      if (s) await conn.execute(s);
+    }
+    db = conn;
+  }
   return db;
 }
 
@@ -14,15 +27,34 @@ function uuid(): string {
 
 export async function getIssues(): Promise<Issue[]> {
   const db = await getDb();
+  // Sort: status (in_progress → open → done → cancelled), then priority
+  // (critical → low), then newest first. Mirrored by sortIssues() in the store
+  // so client-side patches stay in the same order without a reload.
   const issues = await db.select<Issue[]>(`
     SELECT i.*,
       (SELECT COUNT(*) FROM comments c WHERE c.issue_id = i.id) as comment_count
     FROM issues i
-    ORDER BY i.sort_order DESC, i.created_at DESC
+    ORDER BY
+      CASE i.status WHEN 'in_progress' THEN 0 WHEN 'open' THEN 1 WHEN 'done' THEN 2 WHEN 'cancelled' THEN 3 ELSE 4 END,
+      CASE i.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
+      i.created_at DESC
   `);
-  for (const issue of issues) {
-    issue.labels = await getIssueLabels(issue.id);
+  if (issues.length === 0) return issues;
+
+  // Pull every issue↔label pair in one query and group in memory, instead of
+  // a per-issue query (N+1). One round-trip regardless of list size.
+  const rows = await db.select<(Label & { issue_id: string })[]>(`
+    SELECT il.issue_id, l.id, l.name, l.color
+    FROM issue_labels il
+    JOIN labels l ON l.id = il.label_id
+  `);
+  const byIssue = new Map<string, Label[]>();
+  for (const { issue_id, ...label } of rows) {
+    const arr = byIssue.get(issue_id);
+    if (arr) arr.push(label);
+    else byIssue.set(issue_id, [label]);
   }
+  for (const issue of issues) issue.labels = byIssue.get(issue.id) ?? [];
   return issues;
 }
 
@@ -48,8 +80,8 @@ export async function createIssue(data: {
   const now = Date.now();
   const sourceMeta = data.sourceMeta ? JSON.stringify(data.sourceMeta) : null;
   await db.execute(
-    'INSERT INTO issues (id, title, body, priority, status, created_at, updated_at, sort_order, source, source_meta) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, data.title, data.body, data.priority, 'open', now, now, now, data.source ?? null, sourceMeta]
+    'INSERT INTO issues (id, title, body, priority, status, created_at, updated_at, source, source_meta) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [id, data.title, data.body, data.priority, 'open', now, now, data.source ?? null, sourceMeta]
   );
   if (data.labelIds?.length) {
     for (const lid of data.labelIds) {
@@ -77,19 +109,6 @@ export async function deleteIssue(id: string): Promise<void> {
   await db.execute('DELETE FROM issues WHERE id = ?', [id]);
 }
 
-/**
- * Persist manual ordering. `orderedIds` is the full set of issue ids in the
- * desired top-to-bottom order; sort_order is reassigned to a fresh contiguous
- * descending range. updated_at is deliberately left untouched.
- */
-export async function reorderIssues(orderedIds: string[]): Promise<void> {
-  const db = await getDb();
-  const n = orderedIds.length;
-  for (let i = 0; i < n; i++) {
-    await db.execute('UPDATE issues SET sort_order = ? WHERE id = ?', [n - i, orderedIds[i]]);
-  }
-}
-
 export async function getComments(issueId: string): Promise<Comment[]> {
   const db = await getDb();
   return db.select<Comment[]>('SELECT * FROM comments WHERE issue_id = ? ORDER BY created_at ASC', [issueId]);
@@ -111,37 +130,39 @@ export async function deleteComment(id: string): Promise<void> {
 }
 
 // --- Attachments -----------------------------------------------------------
-// File bytes are stored base64-encoded as TEXT in the (BLOB-declared) `data`
-// column — SQLite is dynamically typed, so this avoids binary-binding issues.
+// Bytes live on disk under appDataDir/attachments/<rel_path>; the DB holds only
+// the path + metadata.
 
 export async function addAttachment(opts: {
+  id: string;
   issueId?: string | null;
   commentId?: string | null;
   filename: string;
   mimeType: string | null;
-  base64: string;
+  relPath: string;
   size: number;
 }): Promise<void> {
   const db = await getDb();
   await db.execute(
-    'INSERT INTO attachments (id, issue_id, comment_id, filename, mime_type, data, size_bytes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [uuid(), opts.issueId ?? null, opts.commentId ?? null, opts.filename, opts.mimeType, opts.base64, opts.size, Date.now()]
+    'INSERT INTO attachments (id, issue_id, comment_id, filename, mime_type, rel_path, size_bytes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    [opts.id, opts.issueId ?? null, opts.commentId ?? null, opts.filename, opts.mimeType, opts.relPath, opts.size, Date.now()]
   );
 }
 
-/** Metadata only (no `data` blob) — cheap to load for listing. */
+/** Metadata only (no bytes) — cheap to load for listing. */
 export async function getAttachments(issueId: string): Promise<Attachment[]> {
   const db = await getDb();
   return db.select<Attachment[]>(
-    'SELECT id, issue_id, comment_id, filename, mime_type, size_bytes, created_at FROM attachments WHERE issue_id = ? ORDER BY created_at ASC',
+    'SELECT id, issue_id, comment_id, filename, mime_type, rel_path, size_bytes, created_at FROM attachments WHERE issue_id = ? ORDER BY created_at ASC',
     [issueId]
   );
 }
 
-export async function getAttachmentData(id: string): Promise<Pick<Attachment, 'data' | 'mime_type' | 'filename'> | null> {
+/** Path + metadata for one attachment. */
+export async function getAttachmentData(id: string): Promise<Pick<Attachment, 'rel_path' | 'mime_type' | 'filename'> | null> {
   const db = await getDb();
-  const rows = await db.select<Pick<Attachment, 'data' | 'mime_type' | 'filename'>[]>(
-    'SELECT data, mime_type, filename FROM attachments WHERE id = ?',
+  const rows = await db.select<Pick<Attachment, 'rel_path' | 'mime_type' | 'filename'>[]>(
+    'SELECT rel_path, mime_type, filename FROM attachments WHERE id = ?',
     [id]
   );
   return rows[0] ?? null;
@@ -169,6 +190,14 @@ export async function setSetting(key: string, value: string): Promise<void> {
 export async function getLabels(): Promise<Label[]> {
   const db = await getDb();
   return db.select<Label[]>('SELECT * FROM labels ORDER BY name');
+}
+
+export async function createLabel(name: string, color: string): Promise<Label> {
+  const db = await getDb();
+  const id = uuid();
+  // `name` is UNIQUE in the schema — a duplicate throws, surfaced as a toast.
+  await db.execute('INSERT INTO labels (id, name, color) VALUES (?, ?, ?)', [id, name, color]);
+  return { id, name, color };
 }
 
 async function getIssueLabels(issueId: string): Promise<Label[]> {
