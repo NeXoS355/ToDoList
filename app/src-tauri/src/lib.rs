@@ -199,3 +199,22 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn safe_rel_accepts_a_plain_id() {
+        assert!(safe_rel("a1b2c3d4-uuid").is_ok());
+    }
+
+    #[test]
+    fn safe_rel_rejects_empty_separators_and_traversal() {
+        assert!(safe_rel("").is_err());
+        assert!(safe_rel("a/b").is_err());
+        assert!(safe_rel("a\\b").is_err());
+        assert!(safe_rel("..").is_err());
+        assert!(safe_rel("../secret").is_err());
+    }
+}
