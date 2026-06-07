@@ -70,6 +70,33 @@ fn export_attachment(app: tauri::AppHandle, rel_path: String, dest: String) -> R
     Ok(())
 }
 
+/// Open a stored attachment with the OS default program. The bytes on disk are
+/// named by a bare id (no extension), so the default-app association can't be
+/// resolved from them directly — copy to a temp file that keeps the original
+/// filename (hence its extension), then hand that to the opener.
+#[tauri::command]
+fn open_attachment(app: tauri::AppHandle, rel_path: String, filename: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    safe_rel(&rel_path)?;
+    let src = attachments_dir(&app)?.join(&rel_path);
+    if !src.exists() {
+        return Err("attachment file is missing".into());
+    }
+    // Keep only the base name so a crafted filename can't redirect the copy.
+    let name = std::path::Path::new(&filename)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("attachment");
+    let dir = std::env::temp_dir().join("todolist-open");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dest = dir.join(name);
+    std::fs::copy(&src, &dest).map_err(|e| e.to_string())?;
+    app.opener()
+        .open_path(dest.to_string_lossy(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 /// Remove an attachment's bytes from disk. Missing file is not an error so a
 /// stale row can always be cleaned up.
 #[tauri::command]
@@ -138,6 +165,7 @@ pub fn run() {
             launched_quick_add,
             save_attachment,
             export_attachment,
+            open_attachment,
             delete_attachment_file
         ])
         .setup(|app| {

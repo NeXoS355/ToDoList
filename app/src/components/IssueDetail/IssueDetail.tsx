@@ -1,6 +1,6 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { useState, useRef, useEffect } from 'react';
-import { Trash2, CircleDot, Clock, CircleCheck, XCircle, ChevronDown, Paperclip, FileText, Download, Mail, Plus, Check, X, Tag } from 'lucide-react';
+import { Trash2, CircleDot, Clock, CircleCheck, XCircle, ChevronDown, Paperclip, FileText, Download, ExternalLink, Mail, Plus, Check, X, Tag } from 'lucide-react';
 import type { Status, Priority } from '../../lib/types';
 import { PRIORITY_CONFIG, STATUS_CONFIG, formatBytes } from '../../lib/types';
 import { readEmailMeta } from '../../lib/emailParse';
@@ -19,13 +19,14 @@ const STATUS_ICONS: Record<Status, React.ReactNode> = {
 };
 
 export function IssueDetail() {
-  const { issues, selectedId, updateIssue, deleteIssue, attachments, addAttachment, deleteAttachment, downloadAttachment, labels, setIssueLabels, createLabel } = useIssueStore();
+  const { issues, selectedId, updateIssue, deleteIssue, attachments, downloadAttachment, openAttachment, labels, setIssueLabels, createLabel } = useIssueStore();
   const issue = issues.find(i => i.id === selectedId) ?? null;
+  // Issue-level files only; comment attachments render inside their comment.
+  const issueAttachments = attachments.filter(a => a.comment_id == null);
   const [showStatusMenu, setShowStatusMenu] = useState(false);
   const [showPriorityMenu, setShowPriorityMenu] = useState(false);
   const [showLabelMenu, setShowLabelMenu] = useState(false);
   const [newLabel, setNewLabel] = useState('');
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const statusMenuRef = useRef<HTMLDivElement>(null);
   const priorityMenuRef = useRef<HTMLDivElement>(null);
   const labelMenuRef = useRef<HTMLDivElement>(null);
@@ -78,12 +79,6 @@ export function IssueDetail() {
     if (!issue) return;
     setShowStatusMenu(false);
     await updateIssue(issue.id, { status });
-  };
-
-  const handleFilesPicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!issue) return;
-    for (const f of Array.from(e.target.files ?? [])) await addAttachment(issue.id, f);
-    e.target.value = '';
   };
 
   const handlePriorityChange = async (priority: Priority) => {
@@ -359,58 +354,39 @@ export function IssueDetail() {
               </p>
             )}
 
-            {/* Attachments */}
-            <div className="mt-8 pt-6 border-t border-[var(--border)]">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-dim)] flex items-center gap-2">
+            {/* Attachments — added at creation only; later files go via comments. */}
+            {issueAttachments.length > 0 && (
+              <div className="mt-8 pt-6 border-t border-[var(--border)]">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-dim)] mb-4 flex items-center gap-2">
                   <Paperclip className="w-4 h-4" />
-                  Attachments {attachments.length > 0 && <span className="text-[var(--text-dim)]/70">· {attachments.length}</span>}
+                  Attachments <span className="text-[var(--text-dim)]/70">· {issueAttachments.length}</span>
                 </h3>
-                <input ref={fileInputRef} type="file" multiple onChange={handleFilesPicked} className="hidden" />
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="text-xs flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[var(--border-strong)] hover:bg-white/[0.06] bg-white/[0.03] transition-colors text-[var(--text)]"
-                >
-                  <Paperclip className="w-3.5 h-3.5" /> Attach file
-                </button>
-              </div>
-
-              {attachments.length === 0 ? (
-                <p className="text-sm text-[var(--text-dim)] italic">No files attached.</p>
-              ) : (
-                <div className="flex flex-col gap-2">
-                  <AnimatePresence initial={false}>
-                    {attachments.map(att => (
-                      <motion.div
-                        key={att.id}
-                        layout
-                        initial={{ opacity: 0, y: 6 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, x: -10 }}
-                        transition={{ duration: 0.15 }}
-                        className="group flex items-center gap-3 bg-white/[0.025] border border-[var(--border)] rounded-xl px-3.5 py-2.5 hover:bg-white/[0.05] transition-colors"
+                <div className="flex flex-col gap-1.5">
+                  {issueAttachments.map(att => (
+                    <div
+                      key={att.id}
+                      className="flex items-center gap-2.5 bg-white/[0.025] border border-[var(--border)] rounded-lg px-3 py-2 hover:bg-white/[0.05] transition-colors"
+                    >
+                      <FileText className="w-3.5 h-3.5 text-[var(--text-dim)] shrink-0" />
+                      <button
+                        onClick={() => openAttachment(att.id)}
+                        className="flex-1 min-w-0 text-left text-xs text-[var(--text-bright)] truncate hover:underline underline-offset-2"
+                        title={`Open ${att.filename}`}
                       >
-                        <FileText className="w-4 h-4 text-[var(--text-dim)] shrink-0" />
-                        <button
-                          onClick={() => downloadAttachment(att.id)}
-                          className="flex-1 min-w-0 text-left text-sm text-[var(--text-bright)] truncate hover:underline underline-offset-2"
-                          title={`Download ${att.filename}`}
-                        >
-                          {att.filename}
-                        </button>
-                        <span className="text-xs text-[var(--text-dim)] shrink-0">{formatBytes(att.size_bytes)}</span>
-                        <button onClick={() => downloadAttachment(att.id)} className="text-[var(--text-dim)] hover:text-blue-400 transition-colors shrink-0" title="Download">
-                          <Download className="w-4 h-4" />
-                        </button>
-                        <button onClick={() => deleteAttachment(att.id)} className="text-[var(--text-dim)] hover:text-red-400 transition-colors shrink-0 opacity-0 group-hover:opacity-100" title="Delete">
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </motion.div>
-                    ))}
-                  </AnimatePresence>
+                        {att.filename}
+                      </button>
+                      <span className="text-[11px] text-[var(--text-dim)] shrink-0">{formatBytes(att.size_bytes)}</span>
+                      <button onClick={() => openAttachment(att.id)} className="text-[var(--text-dim)] hover:text-blue-400 transition-colors shrink-0" title="Open with default app">
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </button>
+                      <button onClick={() => downloadAttachment(att.id)} className="text-[var(--text-dim)] hover:text-blue-400 transition-colors shrink-0" title="Save as…">
+                        <Download className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
                 </div>
-              )}
-            </div>
+              </div>
+            )}
 
             <CommentBox issueId={issue.id} />
           </div>

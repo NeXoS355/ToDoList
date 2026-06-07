@@ -55,11 +55,12 @@ interface IssueStore {
   deleteIssue: (id: string) => Promise<void>;
   setIssueLabels: (issueId: string, labelIds: string[]) => Promise<void>;
   createLabel: (name: string) => Promise<Label | null>;
-  addComment: (issueId: string, body: string) => Promise<void>;
+  addComment: (issueId: string, body: string, files?: File[]) => Promise<void>;
   deleteComment: (id: string) => Promise<void>;
-  addAttachment: (issueId: string, file: File) => Promise<void>;
+  addAttachment: (issueId: string, file: File, commentId?: string | null) => Promise<void>;
   deleteAttachment: (id: string) => Promise<void>;
   downloadAttachment: (id: string) => Promise<void>;
+  openAttachment: (id: string) => Promise<void>;
   setFilter: (f: Partial<IssueStore['filter']>) => void;
 }
 
@@ -67,6 +68,21 @@ export const useIssueStore = create<IssueStore>((set, get) => {
   // Surface any thrown DB/IO error as a toast instead of a silent unhandled
   // rejection. Returns nothing — callers that need a value get null on failure.
   const fail = (e: unknown) => set({ error: e instanceof Error ? e.message : String(e) });
+
+  // Write one file's bytes to disk (via Rust) and record it in the DB. Shared by
+  // addAttachment (issue-level) and addComment (comment-level). Returns false if
+  // the file was rejected (too large) so callers can skip the row.
+  const persistAttachment = async (issueId: string, file: File, commentId: string | null): Promise<boolean> => {
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      set({ error: `"${file.name}" is too large (max ${formatBytes(MAX_ATTACHMENT_BYTES)}).` });
+      return false;
+    }
+    const id = crypto.randomUUID();
+    const base64 = await fileToBase64(file);
+    const relPath = await invoke<string>('save_attachment', { id, data: base64 });
+    await db.addAttachment({ id, issueId, commentId, filename: file.name, mimeType: file.type || null, relPath, size: file.size });
+    return true;
+  };
 
   return {
     issues: [],
@@ -173,13 +189,16 @@ export const useIssueStore = create<IssueStore>((set, get) => {
       }
     },
 
-    addComment: async (issueId, body) => {
+    addComment: async (issueId, body, files) => {
       try {
-        await db.addComment(issueId, body);
-        const comments = await db.getComments(issueId);
+        const comment = await db.addComment(issueId, body);
+        // Attach any picked files to the freshly created comment.
+        for (const f of files ?? []) await persistAttachment(issueId, f, comment.id);
+        const [comments, attachments] = await Promise.all([db.getComments(issueId), db.getAttachments(issueId)]);
         const now = Date.now();
         set(s => ({
           comments,
+          attachments,
           issues: s.issues.map(i => (i.id === issueId ? { ...i, comment_count: (i.comment_count ?? 0) + 1, updated_at: now } : i)),
         }));
       } catch (e) {
@@ -189,12 +208,19 @@ export const useIssueStore = create<IssueStore>((set, get) => {
 
     deleteComment: async (id) => {
       try {
+        // DB rows cascade on comment delete, but the bytes on disk don't — remove
+        // each attached file first so nothing is orphaned.
+        const orphans = get().attachments.filter(a => a.comment_id === id);
         await db.deleteComment(id);
+        for (const att of orphans) {
+          if (att.rel_path) await invoke('delete_attachment_file', { relPath: att.rel_path }).catch(() => {});
+        }
         const issueId = get().selectedId;
         if (issueId) {
-          const comments = await db.getComments(issueId);
+          const [comments, attachments] = await Promise.all([db.getComments(issueId), db.getAttachments(issueId)]);
           set(s => ({
             comments,
+            attachments,
             issues: s.issues.map(i => (i.id === issueId ? { ...i, comment_count: Math.max(0, (i.comment_count ?? 0) - 1) } : i)),
           }));
         }
@@ -203,18 +229,10 @@ export const useIssueStore = create<IssueStore>((set, get) => {
       }
     },
 
-    addAttachment: async (issueId, file) => {
+    addAttachment: async (issueId, file, commentId = null) => {
       try {
-        if (file.size > MAX_ATTACHMENT_BYTES) {
-          set({ error: `"${file.name}" is too large (max ${formatBytes(MAX_ATTACHMENT_BYTES)}).` });
-          return;
-        }
-        // Write bytes to disk via Rust, store only the returned path in the DB.
-        const id = crypto.randomUUID();
-        const base64 = await fileToBase64(file);
-        const relPath = await invoke<string>('save_attachment', { id, data: base64 });
-        await db.addAttachment({ id, issueId, filename: file.name, mimeType: file.type || null, relPath, size: file.size });
-        if (get().selectedId === issueId) set({ attachments: await db.getAttachments(issueId) });
+        const ok = await persistAttachment(issueId, file, commentId);
+        if (ok && get().selectedId === issueId) set({ attachments: await db.getAttachments(issueId) });
       } catch (e) {
         fail(e);
       }
@@ -240,6 +258,19 @@ export const useIssueStore = create<IssueStore>((set, get) => {
         const dest = await save({ defaultPath: att.filename });
         if (!dest) return; // dialog cancelled
         await invoke('export_attachment', { relPath: att.rel_path, dest });
+      } catch (e) {
+        fail(e);
+      }
+    },
+
+    openAttachment: async (id) => {
+      try {
+        const att = await db.getAttachmentData(id);
+        if (!att?.rel_path) return;
+        // Open with the OS default program for the file's extension (Rust copies
+        // it to a temp file under its real name first, since stored bytes are
+        // named by a bare id).
+        await invoke('open_attachment', { relPath: att.rel_path, filename: att.filename });
       } catch (e) {
         fail(e);
       }
