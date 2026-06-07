@@ -6,6 +6,8 @@ import { PRIORITY_CONFIG, STATUS_CONFIG, formatBytes } from '../../lib/types';
 import { readEmailMeta } from '../../lib/emailParse';
 import { useIssueStore } from '../../stores/issueStore';
 import { CommentBox } from '../CommentBox/CommentBox';
+import { Markdown } from '../Markdown/Markdown';
+import { MarkdownToolbar } from '../Markdown/MarkdownToolbar';
 
 function formatDate(ts: number): string {
   return new Date(ts).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -27,6 +29,7 @@ export function IssueDetail() {
   const [showPriorityMenu, setShowPriorityMenu] = useState(false);
   const [showLabelMenu, setShowLabelMenu] = useState(false);
   const [newLabel, setNewLabel] = useState('');
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
   const statusMenuRef = useRef<HTMLDivElement>(null);
   const priorityMenuRef = useRef<HTMLDivElement>(null);
   const labelMenuRef = useRef<HTMLDivElement>(null);
@@ -323,27 +326,31 @@ export function IssueDetail() {
           {/* Body */}
           <div className="px-8 py-6 flex-1">
             {editingBody ? (
-              <textarea
-                autoFocus
-                value={bodyDraft}
-                onChange={e => setBodyDraft(e.target.value)}
-                onBlur={commitBody}
-                onKeyDown={e => {
-                  if (e.key === 'Escape') { e.preventDefault(); setEditingBody(false); }
-                  else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); commitBody(); }
-                }}
-                rows={Math.max(4, bodyDraft.split('\n').length + 1)}
-                placeholder="Add a description… (Esc to cancel, ⌘/Ctrl+Enter to save)"
-                className="w-full bg-white/[0.04] border border-blue-500/40 rounded-xl px-4 py-3 text-[15px] leading-relaxed text-[var(--text)] placeholder:text-[var(--text-dim)] outline-none focus:bg-white/[0.06] focus:ring-4 focus:ring-blue-500/10 resize-none transition-all"
-              />
+              <>
+                <MarkdownToolbar textareaRef={bodyRef} value={bodyDraft} onChange={setBodyDraft} className="mb-1.5" />
+                <textarea
+                  ref={bodyRef}
+                  autoFocus
+                  value={bodyDraft}
+                  onChange={e => setBodyDraft(e.target.value)}
+                  onBlur={commitBody}
+                  onKeyDown={e => {
+                    if (e.key === 'Escape') { e.preventDefault(); setEditingBody(false); }
+                    else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); commitBody(); }
+                  }}
+                  rows={Math.max(4, bodyDraft.split('\n').length + 1)}
+                  placeholder="Add a description… (Esc to cancel, ⌘/Ctrl+Enter to save)"
+                  className="w-full bg-white/[0.04] border border-blue-500/40 rounded-xl px-4 py-3 text-[15px] leading-relaxed text-[var(--text)] placeholder:text-[var(--text-dim)] outline-none focus:bg-white/[0.06] focus:ring-4 focus:ring-blue-500/10 resize-none transition-all"
+                />
+              </>
             ) : issue.body ? (
-              <p
+              <div
                 onClick={startBodyEdit}
                 title="Click to edit"
-                className="text-[15px] text-[var(--text)] whitespace-pre-wrap leading-relaxed cursor-text rounded-lg -mx-2 px-2 py-1 hover:bg-white/[0.03] transition-colors"
+                className="text-[15px] text-[var(--text)] leading-relaxed cursor-text rounded-lg -mx-2 px-2 py-1 hover:bg-white/[0.03] transition-colors"
               >
-                {issue.body}
-              </p>
+                <Markdown>{issue.body}</Markdown>
+              </div>
             ) : (
               <p
                 onClick={startBodyEdit}

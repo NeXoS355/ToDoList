@@ -4,6 +4,8 @@ import { MessageSquarePlus, Paperclip, FileText, Download, ExternalLink, X } fro
 import type { Comment } from '../../lib/types';
 import { formatBytes } from '../../lib/types';
 import { useIssueStore } from '../../stores/issueStore';
+import { Markdown } from '../Markdown/Markdown';
+import { MarkdownToolbar } from '../Markdown/MarkdownToolbar';
 
 function formatDate(ts: number): string {
   return new Date(ts).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -30,7 +32,7 @@ function CommentItem({ comment }: CommentItemProps) {
         <span className="text-xs text-[var(--text-dim)]">{formatDate(comment.created_at)}</span>
       </div>
       <div className="px-4 py-3.5">
-        <p className="text-sm text-[var(--text)] whitespace-pre-wrap leading-relaxed">{comment.body}</p>
+        {comment.body && <Markdown className="text-sm text-[var(--text)] leading-relaxed">{comment.body}</Markdown>}
 
         {files.length > 0 && (
           <div className="flex flex-col gap-1.5 mt-3 pt-3 border-t border-[var(--border)]">
@@ -73,6 +75,7 @@ export function CommentBox({ issueId }: Props) {
   const [pending, setPending] = useState<File[]>([]);
   const [saving, setSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const handleFilesPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
     setPending(prev => [...prev, ...Array.from(e.target.files ?? [])]);
@@ -114,7 +117,9 @@ export function CommentBox({ issueId }: Props) {
       </div>
 
       <form onSubmit={handleSubmit} className="mt-4">
+        <MarkdownToolbar textareaRef={textareaRef} value={text} onChange={setText} className="mb-1.5" />
         <textarea
+          ref={textareaRef}
           value={text}
           onChange={e => setText(e.target.value)}
           onKeyDown={handleKeyDown}

@@ -5,6 +5,7 @@ import type { Priority, Label } from '../../lib/types';
 import { PRIORITY_CONFIG, formatBytes } from '../../lib/types';
 import { useIssueStore } from '../../stores/issueStore';
 import { parseEmailSmart, parseEmailFile, guessTitle, type EmailMeta, type ParsedEmail } from '../../lib/emailParse';
+import { MarkdownToolbar } from '../Markdown/MarkdownToolbar';
 
 interface Props {
   onClose: () => void;
@@ -222,6 +223,7 @@ export function NewIssueForm({ onClose, initialTitle = '', initialBody = '', ini
 
           {/* Body */}
           <div>
+            <MarkdownToolbar textareaRef={textareaRef} value={body} onChange={setBody} className="mb-1.5" />
             <textarea
               ref={textareaRef}
               placeholder="Description — paste a forwarded email here to auto-fill"
