@@ -32,8 +32,8 @@ tauri-plugin-single-instance = "2"
 # Optimized shipping binary: smaller + faster to load/run.
 [profile.release]
 opt-level = "s"     # optimize for size (smaller binary loads faster)
-lto = true          # link-time optimization across crates
-codegen-units = 1   # better optimization (slower compile, release only)
+lto = "thin"        # cross-crate optimization, far faster to link than full LTO
+codegen-units = 16  # parallel codegen — much faster compile, negligible size cost
 panic = "abort"     # drop unwinding machinery
 strip = true        # strip symbols
 
