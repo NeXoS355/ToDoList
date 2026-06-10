@@ -8,7 +8,18 @@
     <style>
       /* Painted before any CSS/JS module loads — kills the white flash. */
       html, body { margin: 0; background: #0b0f14; }
+      html[data-theme="light"], html[data-theme="light"] body { background: #f3f5f8; }
     </style>
+    <script>
+      /* Resolve theme before first paint: stored choice, else OS preference. */
+      (function () {
+        try {
+          var t = localStorage.getItem('theme');
+          if (!t) t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+          document.documentElement.setAttribute('data-theme', t);
+        } catch (e) {}
+      })();
+    </script>
   </head>
 
   <body>

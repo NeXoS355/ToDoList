@@ -115,13 +115,13 @@ export function IssueList() {
 
       {/* Filters */}
       <div className="px-4 pb-3 border-b border-[var(--border)] flex gap-1.5 flex-wrap">
-        {(['all', 'open', 'in_progress', 'done'] as const).map(s => (
+        {(['all', 'open', 'done'] as const).map(s => (
           <button
             key={s}
             onClick={() => setFilter({ status: s })}
             className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-colors ${filter.status === s ? 'bg-blue-500/15 text-blue-300 ring-1 ring-inset ring-blue-500/25' : 'text-[var(--text-dim)] hover:text-[var(--text-bright)] hover:bg-white/[0.04]'}`}
           >
-            {s === 'all' ? 'All' : s === 'in_progress' ? 'In Progress' : s.charAt(0).toUpperCase() + s.slice(1)}
+            {s === 'all' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
           </button>
         ))}
       </div>

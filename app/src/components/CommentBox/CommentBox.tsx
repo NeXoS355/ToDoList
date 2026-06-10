@@ -156,7 +156,7 @@ export function CommentBox({ issueId }: Props) {
           <button
             type="submit"
             disabled={(!text.trim() && pending.length === 0) || saving}
-            className="text-sm px-4 py-2 rounded-xl bg-gradient-to-b from-blue-500 to-blue-600 hover:from-blue-400 hover:to-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium shadow-lg shadow-blue-600/20 ring-1 ring-inset ring-white/15 transition-all active:scale-[0.97]"
+            className="text-sm px-4 py-2 rounded-xl bg-gradient-to-b from-blue-500 to-blue-600 hover:from-blue-400 hover:to-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-[#fff] font-medium shadow-lg shadow-blue-600/20 ring-1 ring-inset ring-white/15 transition-all active:scale-[0.97]"
           >
             {saving ? 'Saving...' : 'Comment'}
           </button>

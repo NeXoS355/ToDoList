@@ -10,6 +10,7 @@
 @source "./components/NewIssueForm/*.tsx";
 
 :root {
+  color-scheme: dark;
   --bg:            #0b0f14;
   --surface:       #11161d;
   --surface-2:     #161c25;
@@ -20,6 +21,40 @@
   --text-dim:      #7e8a99;
   --accent:        #4d8dff;
   --accent-soft:   rgba(77, 141, 255, 0.14);
+
+  /* Atmosphere + chrome colors that need to flip with the theme */
+  --glow-a:        rgba(77, 141, 255, 0.07);
+  --glow-b:        rgba(120, 90, 255, 0.05);
+  --selection:     rgba(77, 141, 255, 0.30);
+  --scrollbar:      rgba(255, 255, 255, 0.07);
+  --scrollbar-hover: rgba(255, 255, 255, 0.16);
+}
+
+/* Light theme — for strong ambient light / sunlight readability.
+   A light background overpowers screen glare, so dark-on-light text
+   stays legible where dark themes wash out. Most surface tints in the
+   app are `bg-white/[α]` overlays; redefining Tailwind's --color-white
+   to a dark slate flips them all to subtle dark tints automatically,
+   so panels keep their depth without touching every component. */
+[data-theme="light"] {
+  color-scheme: light;
+  --color-white:   #1c2630;          /* flips bg/border/ring-white overlays dark */
+  --bg:            #f3f5f8;
+  --surface:       #ffffff;
+  --surface-2:     #eef1f6;
+  --border:        rgba(15, 23, 32, 0.12);
+  --border-strong: rgba(15, 23, 32, 0.20);
+  --text:          #1c2630;
+  --text-bright:   #0b1117;
+  --text-dim:      #51606f;
+  --accent:        #1d63d6;
+  --accent-soft:   rgba(29, 99, 214, 0.12);
+
+  --glow-a:        rgba(37, 99, 235, 0.06);
+  --glow-b:        rgba(120, 90, 255, 0.05);
+  --selection:     rgba(29, 99, 214, 0.22);
+  --scrollbar:       rgba(15, 23, 32, 0.18);
+  --scrollbar-hover: rgba(15, 23, 32, 0.34);
 }
 
 *, *::before, *::after {
@@ -42,15 +77,16 @@ html, body, #root {
 /* Layered, non-flat backdrop: deep base + a soft top glow for depth */
 body {
   background:
-    radial-gradient(120% 80% at 50% -10%, rgba(77, 141, 255, 0.07), transparent 60%),
-    radial-gradient(90% 60% at 100% 0%, rgba(120, 90, 255, 0.05), transparent 55%),
+    radial-gradient(120% 80% at 50% -10%, var(--glow-a), transparent 60%),
+    radial-gradient(90% 60% at 100% 0%, var(--glow-b), transparent 55%),
     var(--bg);
   background-attachment: fixed;
+  transition: background-color 0.25s ease, color 0.25s ease;
 }
 
 /* Selection: tinted instead of harsh blue/white */
 ::selection {
-  background: rgba(77, 141, 255, 0.30);
+  background: var(--selection);
   color: var(--text-bright);
 }
 
@@ -63,13 +99,13 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.07);
+  background: var(--scrollbar);
   border-radius: 999px;
   border: 3px solid transparent;
   background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.16);
+  background: var(--scrollbar-hover);
   background-clip: padding-box;
 }
 
