@@ -1,7 +1,6 @@
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { invoke } from '@tauri-apps/api/core';
-import { save } from '@tauri-apps/plugin-dialog';
 import type { Issue, Comment, Label, Attachment, Priority, Status } from '../lib/types';
 import { formatBytes } from '../lib/types';
 import * as db from '../lib/db';
@@ -254,10 +253,9 @@ export const useIssueStore = create<IssueStore>((set, get) => {
       try {
         const att = await db.getAttachmentData(id);
         if (!att?.rel_path) return;
-        // Pick a destination, then copy the stored file there (Rust).
-        const dest = await save({ defaultPath: att.filename });
-        if (!dest) return; // dialog cancelled
-        await invoke('export_attachment', { relPath: att.rel_path, dest });
+        // Rust opens the save dialog itself and copies the file — the
+        // destination path never passes through the webview.
+        await invoke('export_attachment', { relPath: att.rel_path, filename: att.filename });
       } catch (e) {
         fail(e);
       }

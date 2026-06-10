@@ -23,12 +23,14 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src ipc: http://ipc.localhost",
+      "devCsp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:; font-src 'self'; connect-src ipc: http://ipc.localhost ws://localhost:1420 http://localhost:1420"
     }
   },
   "bundle": {
     "active": true,
     "targets": ["appimage", "msi"],
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -38,6 +40,15 @@
     ]
   },
   "plugins": {
-    "sql": {}
+    "sql": {},
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERGNjI5NEJCOEZDQjI4RkMKUldUOEtNdVB1NVJpM3l6Tm5QQTQva3ZyQ0M5Q2FXYzZGRXFXVSt5Wm1KM3pwRkszL3VWMHRybXMK",
+      "endpoints": [
+        "https://github.com/NeXoS355/ToDoList/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }
