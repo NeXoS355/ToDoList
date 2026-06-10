@@ -11,6 +11,7 @@ import { IssueDetail } from './components/IssueDetail/IssueDetail';
 import { NewIssueForm } from './components/NewIssueForm/NewIssueForm';
 import { QuickComposer } from './components/QuickComposer/QuickComposer';
 import { ErrorToast } from './components/ErrorToast/ErrorToast';
+import { UpdateBanner } from './components/UpdateBanner/UpdateBanner';
 import { parseEmailFile, base64ToBytes, guessTitle, type EmailMeta, type ParsedEmail } from './lib/emailParse';
 
 interface Draft {
@@ -206,6 +207,7 @@ export default function App() {
       </AnimatePresence>
 
       <ErrorToast />
+      <UpdateBanner />
     </div>
   );
 }

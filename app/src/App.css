@@ -8,6 +8,7 @@
 @source "./components/IssueList/*.tsx";
 @source "./components/IssueDetail/*.tsx";
 @source "./components/NewIssueForm/*.tsx";
+@source "./components/UpdateBanner/*.tsx";
 
 :root {
   color-scheme: dark;

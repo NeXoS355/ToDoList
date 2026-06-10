@@ -61,13 +61,31 @@ fn save_attachment(app: tauri::AppHandle, id: String, data: String) -> Result<St
     Ok(id)
 }
 
-/// Copy a stored attachment to a user-chosen destination (from the save dialog).
+/// Copy a stored attachment to a user-chosen destination. The save dialog is
+/// opened here in Rust — the webview never supplies a destination path, so a
+/// compromised frontend can't use this as an arbitrary-write primitive.
+/// Returns false when the user cancelled the dialog. (async so the blocking
+/// dialog runs off the main thread.)
 #[tauri::command]
-fn export_attachment(app: tauri::AppHandle, rel_path: String, dest: String) -> Result<(), String> {
+async fn export_attachment(app: tauri::AppHandle, rel_path: String, filename: String) -> Result<bool, String> {
+    use tauri_plugin_dialog::DialogExt;
     safe_rel(&rel_path)?;
     let src = attachments_dir(&app)?.join(&rel_path);
+    if !src.exists() {
+        return Err("attachment file is missing".into());
+    }
+    // Default the dialog to the attachment's real (base) name.
+    let name = std::path::Path::new(&filename)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("attachment");
+    let Some(dest) = app.dialog().file().set_file_name(name).blocking_save_file() else {
+        return Ok(false); // dialog cancelled
+    };
+    let dest = dest.into_path().map_err(|e| e.to_string())?;
     std::fs::copy(&src, &dest).map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(true)
 }
 
 /// Open a stored attachment with the OS default program. The bytes on disk are
@@ -152,6 +170,11 @@ pub fn run() {
                 let _ = app.emit("quick-add", ());
             }
         }));
+        // Auto-update: checks GitHub releases (latest.json) from the frontend;
+        // process plugin provides the relaunch after install.
+        builder = builder
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .plugin(tauri_plugin_process::init());
     }
 
     builder
