@@ -299,7 +299,7 @@ export function IssueDetail() {
             return (
               <div className="px-8 pt-5">
                 <div className="flex items-start gap-3 rounded-xl border border-blue-500/25 bg-gradient-to-br from-blue-500/[0.07] to-violet-500/[0.05] px-3.5 py-3 ring-1 ring-inset ring-white/5">
-                  <div className="shrink-0 w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center text-white text-sm font-semibold shadow-lg shadow-blue-500/20">
+                  <div className="shrink-0 w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center text-[#fff] text-sm font-semibold shadow-lg shadow-blue-500/20">
                     {(meta.fromName || meta.fromEmail || '?').trim().charAt(0).toUpperCase()}
                   </div>
                   <div className="flex-1 min-w-0">

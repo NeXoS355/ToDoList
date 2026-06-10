@@ -284,7 +284,14 @@ export function useFilteredIssues() {
   return useIssueStore(
     useShallow(s =>
       s.issues.filter(issue => {
-        if (s.filter.status !== 'all' && issue.status !== s.filter.status) return false;
+        // "Open" is the merged active filter: it matches both open and
+        // in_progress so work-in-flight isn't hidden. Other statuses match exactly.
+        if (s.filter.status !== 'all') {
+          const matches = s.filter.status === 'open'
+            ? issue.status === 'open' || issue.status === 'in_progress'
+            : issue.status === s.filter.status;
+          if (!matches) return false;
+        }
         if (s.filter.priority !== 'all' && issue.priority !== s.filter.priority) return false;
         if (s.filter.search) {
           const q = s.filter.search.toLowerCase();
