@@ -21,6 +21,7 @@ pnpm-debug.log*
 
 # Local / temp
 *.local
+*.txt
 .npmrc_temp
 .env
 .env.*

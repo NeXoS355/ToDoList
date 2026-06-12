@@ -1,8 +1,8 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { useState, useRef, useEffect } from 'react';
-import { Trash2, CircleDot, Clock, CircleCheck, XCircle, ChevronDown, Paperclip, FileText, Download, ExternalLink, Mail, Plus, Check, X, Tag } from 'lucide-react';
+import { Trash2, CircleDot, Clock, CircleCheck, XCircle, ChevronDown, Paperclip, FileText, Download, ExternalLink, Mail, Plus, Check, X, Tag, CalendarDays } from 'lucide-react';
 import type { Status, Priority } from '../../lib/types';
-import { PRIORITY_CONFIG, STATUS_CONFIG, formatBytes } from '../../lib/types';
+import { PRIORITY_CONFIG, STATUS_CONFIG, formatBytes, isOverdue, dueDateToInputValue, inputValueToDueDate, clipboardImages } from '../../lib/types';
 import { readEmailMeta } from '../../lib/emailParse';
 import { useIssueStore } from '../../stores/issueStore';
 import { CommentBox } from '../CommentBox/CommentBox';
@@ -21,31 +21,34 @@ const STATUS_ICONS: Record<Status, React.ReactNode> = {
 };
 
 export function IssueDetail() {
-  const { issues, selectedId, updateIssue, deleteIssue, attachments, downloadAttachment, openAttachment, labels, setIssueLabels, createLabel } = useIssueStore();
+  const { issues, selectedId, updateIssue, deleteIssue, attachments, downloadAttachment, openAttachment, labels, setIssueLabels, createLabel, addAttachment } = useIssueStore();
   const issue = issues.find(i => i.id === selectedId) ?? null;
   // Issue-level files only; comment attachments render inside their comment.
   const issueAttachments = attachments.filter(a => a.comment_id == null);
   const [showStatusMenu, setShowStatusMenu] = useState(false);
   const [showPriorityMenu, setShowPriorityMenu] = useState(false);
   const [showLabelMenu, setShowLabelMenu] = useState(false);
+  const [showDueMenu, setShowDueMenu] = useState(false);
   const [newLabel, setNewLabel] = useState('');
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const statusMenuRef = useRef<HTMLDivElement>(null);
   const priorityMenuRef = useRef<HTMLDivElement>(null);
   const labelMenuRef = useRef<HTMLDivElement>(null);
+  const dueMenuRef = useRef<HTMLDivElement>(null);
 
   // Close any open picker when clicking outside its container.
   useEffect(() => {
-    if (!showStatusMenu && !showPriorityMenu && !showLabelMenu) return;
+    if (!showStatusMenu && !showPriorityMenu && !showLabelMenu && !showDueMenu) return;
     const onDown = (e: MouseEvent) => {
       const t = e.target as Node;
       if (statusMenuRef.current && !statusMenuRef.current.contains(t)) setShowStatusMenu(false);
       if (priorityMenuRef.current && !priorityMenuRef.current.contains(t)) setShowPriorityMenu(false);
       if (labelMenuRef.current && !labelMenuRef.current.contains(t)) setShowLabelMenu(false);
+      if (dueMenuRef.current && !dueMenuRef.current.contains(t)) setShowDueMenu(false);
     };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
-  }, [showStatusMenu, showPriorityMenu, showLabelMenu]);
+  }, [showStatusMenu, showPriorityMenu, showLabelMenu, showDueMenu]);
 
   // Inline title/body editing — click either to edit, commit on blur/Enter.
   const [editingTitle, setEditingTitle] = useState(false);
@@ -60,6 +63,7 @@ export function IssueDetail() {
     setShowStatusMenu(false);
     setShowPriorityMenu(false);
     setShowLabelMenu(false);
+    setShowDueMenu(false);
     setNewLabel('');
   }, [selectedId]);
 
@@ -90,11 +94,34 @@ export function IssueDetail() {
     await updateIssue(issue.id, { priority });
   };
 
+  // No confirm dialog — delete is undoable via the toast (store defers the
+  // actual DB delete for the undo window).
   const handleDelete = async () => {
     if (!issue) return;
-    if (confirm(`Delete "${issue.title}"?`)) {
-      await deleteIssue(issue.id);
+    await deleteIssue(issue.id);
+  };
+
+  // Update without closing — date inputs fire change per segment while typing;
+  // the popover closes on outside click (or via the Remove button).
+  const handleDueChange = async (value: string) => {
+    if (!issue) return;
+    await updateIssue(issue.id, { due_date: inputValueToDueDate(value) });
+  };
+
+  // Paste an image while editing the body: store it as an attachment and drop
+  // an inline ![](attachment://id) reference at the cursor.
+  const handleBodyPaste = async (e: React.ClipboardEvent) => {
+    if (!issue) return;
+    const images = clipboardImages(e.clipboardData);
+    if (!images.length) return;
+    e.preventDefault();
+    const pos = bodyRef.current?.selectionStart ?? bodyDraft.length;
+    let md = '';
+    for (const img of images) {
+      const id = await addAttachment(issue.id, img);
+      if (id) md += `![${img.name}](attachment://${id})\n`;
     }
+    if (md) setBodyDraft(d => d.slice(0, pos) + md + d.slice(pos));
   };
 
   // Add/remove a label on the current issue.
@@ -219,6 +246,44 @@ export function IssueDetail() {
                   </AnimatePresence>
                 </div>
 
+                {/* Due date picker */}
+                <div ref={dueMenuRef} className="relative">
+                  <button
+                    onClick={() => { setShowDueMenu(v => !v); setShowStatusMenu(false); setShowPriorityMenu(false); setShowLabelMenu(false); }}
+                    className={`text-xs flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[var(--border-strong)] hover:bg-white/[0.06] bg-white/[0.03] transition-colors ${isOverdue(issue) ? 'text-red-400' : issue.due_date != null ? 'text-[var(--text)]' : 'text-[var(--text-dim)]'}`}
+                  >
+                    <CalendarDays className="w-3.5 h-3.5" />
+                    <span>{issue.due_date != null ? new Date(issue.due_date).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }) : 'Due date'}</span>
+                    <ChevronDown className="w-3 h-3 text-slate-500" />
+                  </button>
+                  <AnimatePresence>
+                    {showDueMenu && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -4 }}
+                        className="absolute top-full left-0 mt-2 z-20 bg-[var(--surface-2)] border border-[var(--border-strong)] rounded-xl shadow-2xl shadow-black/40 min-w-44 p-2 flex flex-col gap-1"
+                      >
+                        <input
+                          type="date"
+                          autoFocus
+                          value={issue.due_date != null ? dueDateToInputValue(issue.due_date) : ''}
+                          onChange={e => handleDueChange(e.target.value)}
+                          className="text-xs bg-white/[0.04] border border-[var(--border)] rounded-lg px-2.5 py-2 text-[var(--text)] outline-none focus:border-blue-500/40 transition-colors"
+                        />
+                        {issue.due_date != null && (
+                          <button
+                            onClick={() => { handleDueChange(''); setShowDueMenu(false); }}
+                            className="w-full text-left px-2.5 py-2 rounded-lg text-xs flex items-center gap-2 hover:bg-white/[0.06] transition-colors text-[var(--text-dim)] hover:text-red-400"
+                          >
+                            <X className="w-3.5 h-3.5" /> Remove due date
+                          </button>
+                        )}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+
                 <span className="text-xs text-[var(--text-dim)] ml-0.5">opened {formatDate(issue.created_at)}</span>
               </div>
             </div>
@@ -333,6 +398,7 @@ export function IssueDetail() {
                   autoFocus
                   value={bodyDraft}
                   onChange={e => setBodyDraft(e.target.value)}
+                  onPaste={handleBodyPaste}
                   onBlur={commitBody}
                   onKeyDown={e => {
                     if (e.key === 'Escape') { e.preventDefault(); setEditingBody(false); }
@@ -345,9 +411,11 @@ export function IssueDetail() {
               </>
             ) : issue.body ? (
               <div
-                onClick={startBodyEdit}
+                // Selecting/copying text must not flip into edit mode — only a
+                // plain click (no selection) starts editing.
+                onClick={() => { if (!window.getSelection()?.toString()) startBodyEdit(); }}
                 title="Click to edit"
-                className="text-[15px] text-[var(--text)] leading-relaxed cursor-text rounded-lg -mx-2 px-2 py-1 hover:bg-white/[0.03] transition-colors"
+                className="text-[15px] text-[var(--text)] leading-relaxed cursor-text select-text rounded-lg -mx-2 px-2 py-1 hover:bg-white/[0.03] transition-colors"
               >
                 <Markdown>{issue.body}</Markdown>
               </div>

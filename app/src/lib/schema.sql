@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS issues (
   created_at  INTEGER NOT NULL,
   updated_at  INTEGER NOT NULL,
   source      TEXT,
-  source_meta TEXT
+  source_meta TEXT,
+  due_date    INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS comments (
@@ -29,6 +30,7 @@ CREATE TABLE IF NOT EXISTS attachments (
   mime_type   TEXT,
   rel_path    TEXT,
   size_bytes  INTEGER,
+  checksum    TEXT,
   created_at  INTEGER NOT NULL
 );
 

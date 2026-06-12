@@ -9,6 +9,11 @@
 @source "./components/IssueDetail/*.tsx";
 @source "./components/NewIssueForm/*.tsx";
 @source "./components/UpdateBanner/*.tsx";
+@source "./components/UndoToast/*.tsx";
+@source "./components/Markdown/*.tsx";
+@source "./components/ErrorToast/*.tsx";
+@source "./components/NoticeToast/*.tsx";
+@source "./components/QuickComposer/*.tsx";
 
 :root {
   color-scheme: dark;

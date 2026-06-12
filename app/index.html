@@ -11,11 +11,12 @@
       html[data-theme="light"], html[data-theme="light"] body { background: #f3f5f8; }
     </style>
     <script>
-      /* Resolve theme before first paint: stored choice, else OS preference. */
+      /* Resolve theme before first paint: stored explicit choice, else
+         ("system" or nothing stored) the OS preference. */
       (function () {
         try {
           var t = localStorage.getItem('theme');
-          if (!t) t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+          if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
           document.documentElement.setAttribute('data-theme', t);
         } catch (e) {}
       })();

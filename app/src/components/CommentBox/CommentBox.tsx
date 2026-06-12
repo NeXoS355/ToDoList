@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MessageSquarePlus, Paperclip, FileText, Download, ExternalLink, X } from 'lucide-react';
 import type { Comment } from '../../lib/types';
-import { formatBytes } from '../../lib/types';
+import { formatBytes, clipboardImages } from '../../lib/types';
 import { useIssueStore } from '../../stores/issueStore';
 import { Markdown } from '../Markdown/Markdown';
 import { MarkdownToolbar } from '../Markdown/MarkdownToolbar';
@@ -32,7 +32,7 @@ function CommentItem({ comment }: CommentItemProps) {
         <span className="text-xs text-[var(--text-dim)]">{formatDate(comment.created_at)}</span>
       </div>
       <div className="px-4 py-3.5">
-        {comment.body && <Markdown className="text-sm text-[var(--text)] leading-relaxed">{comment.body}</Markdown>}
+        {comment.body && <Markdown className="text-sm text-[var(--text)] leading-relaxed select-text">{comment.body}</Markdown>}
 
         {files.length > 0 && (
           <div className="flex flex-col gap-1.5 mt-3 pt-3 border-t border-[var(--border)]">
@@ -101,6 +101,14 @@ export function CommentBox({ issueId }: Props) {
     }
   };
 
+  // Pasted images queue up like picked files and ship with the comment.
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const images = clipboardImages(e.clipboardData);
+    if (!images.length) return;
+    e.preventDefault();
+    setPending(prev => [...prev, ...images]);
+  };
+
   return (
     <div className="mt-8 pt-6 border-t border-[var(--border)]">
       <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-dim)] mb-4 flex items-center gap-2">
@@ -123,6 +131,7 @@ export function CommentBox({ issueId }: Props) {
           value={text}
           onChange={e => setText(e.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           placeholder="Add a comment or update... (Ctrl+Enter to submit)"
           rows={3}
           className="w-full bg-white/[0.04] border border-[var(--border)] rounded-xl px-4 py-3 text-sm leading-relaxed text-[var(--text-bright)] placeholder:text-[var(--text-dim)] outline-none focus:border-blue-500/40 focus:bg-white/[0.06] focus:ring-4 focus:ring-blue-500/10 transition-all resize-none"

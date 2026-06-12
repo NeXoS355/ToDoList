@@ -1,8 +1,8 @@
 import { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Paperclip, FileText, Check, Mail, Clock, Plus } from 'lucide-react';
+import { X, Paperclip, FileText, Check, Mail, Clock, Plus, CalendarDays } from 'lucide-react';
 import type { Priority, Label } from '../../lib/types';
-import { PRIORITY_CONFIG, formatBytes } from '../../lib/types';
+import { PRIORITY_CONFIG, formatBytes, inputValueToDueDate, clipboardImages } from '../../lib/types';
 import { useIssueStore } from '../../stores/issueStore';
 import { parseEmailSmart, parseEmailFile, guessTitle, type EmailMeta, type ParsedEmail } from '../../lib/emailParse';
 import { MarkdownToolbar } from '../Markdown/MarkdownToolbar';
@@ -19,6 +19,7 @@ export function NewIssueForm({ onClose, initialTitle = '', initialBody = '', ini
   const [title, setTitle] = useState(initialTitle);
   const [body, setBody] = useState(initialBody);
   const [priority, setPriority] = useState<Priority>('medium');
+  const [dueDate, setDueDate] = useState(''); // <input type="date"> value, '' = none
   const [selectedLabels, setSelectedLabels] = useState<string[]>([]);
   const [newLabel, setNewLabel] = useState('');
   const [files, setFiles] = useState<File[]>([]);
@@ -52,10 +53,17 @@ export function NewIssueForm({ onClose, initialTitle = '', initialBody = '', ini
     }
   };
 
-  // Smart paste: if the clipboard looks like a forwarded/replied email, lift
-  // the subject into the title, the message into the description, and the
-  // sender/date into the source card. Otherwise fall through to a normal paste.
+  // Smart paste: pasted images become pending attachments; if the clipboard
+  // looks like a forwarded/replied email, lift the subject into the title, the
+  // message into the description, and the sender/date into the source card.
+  // Otherwise fall through to a normal paste.
   const handlePaste = (e: React.ClipboardEvent<HTMLElement>) => {
+    const images = clipboardImages(e.clipboardData);
+    if (images.length) {
+      e.preventDefault();
+      setFiles(prev => [...prev, ...images]);
+      return;
+    }
     const text = e.clipboardData.getData('text/plain') || e.clipboardData.getData('text');
     const html = e.clipboardData.getData('text/html');
     const parsed = parseEmailSmart(text, html);
@@ -96,7 +104,7 @@ export function NewIssueForm({ onClose, initialTitle = '', initialBody = '', ini
     if (createdId) { textareaRef.current?.focus(); return; }
     if (!title.trim()) return;
     setBusy(true);
-    const id = await createIssue({ title: title.trim(), body, priority, labelIds: selectedLabels, ...sourceArgs });
+    const id = await createIssue({ title: title.trim(), body, priority, labelIds: selectedLabels, dueDate: inputValueToDueDate(dueDate), ...sourceArgs });
     setBusy(false);
     if (!id) return; // create failed — toast already shown, keep the form open
     setCreatedId(id);
@@ -110,10 +118,10 @@ export function NewIssueForm({ onClose, initialTitle = '', initialBody = '', ini
     let id = createdId;
     if (!id) {
       if (!title.trim()) { onClose(); return; }
-      id = await createIssue({ title: title.trim(), body, priority, labelIds: selectedLabels, ...sourceArgs });
+      id = await createIssue({ title: title.trim(), body, priority, labelIds: selectedLabels, dueDate: inputValueToDueDate(dueDate), ...sourceArgs });
       if (!id) { setBusy(false); return; } // create failed — keep form open
     } else {
-      await updateIssue(id, { title: title.trim() || '(untitled)', body, priority });
+      await updateIssue(id, { title: title.trim() || '(untitled)', body, priority, due_date: inputValueToDueDate(dueDate) });
       await setIssueLabels(id, selectedLabels);
     }
     for (const f of files) await addAttachment(id, f);
@@ -239,27 +247,53 @@ export function NewIssueForm({ onClose, initialTitle = '', initialBody = '', ini
             </p>
           </div>
 
-          {/* Priority */}
-          <div>
-            <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-dim)] mb-2 block">Priority</label>
-            <div className="flex gap-2">
-              {(Object.keys(PRIORITY_CONFIG) as Priority[]).map(p => {
-                const pc = PRIORITY_CONFIG[p];
-                return (
+          {/* Priority + Due date */}
+          <div className="flex gap-4">
+            <div className="flex-1">
+              <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-dim)] mb-2 block">Priority</label>
+              <div className="flex gap-2">
+                {(Object.keys(PRIORITY_CONFIG) as Priority[]).map(p => {
+                  const pc = PRIORITY_CONFIG[p];
+                  return (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setPriority(p)}
+                      className={`flex-1 text-xs py-2.5 rounded-xl border transition-all font-medium ${
+                        priority === p
+                          ? `${pc.color} ${pc.bg} border-current/30 ring-1 ring-inset ring-current/20`
+                          : 'text-[var(--text-dim)] border-[var(--border)] hover:bg-white/[0.04] hover:text-[var(--text)]'
+                      }`}
+                    >
+                      {pc.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="shrink-0">
+              <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-dim)] mb-2 flex items-center gap-1.5">
+                <CalendarDays className="w-3.5 h-3.5" /> Due date
+              </label>
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="date"
+                  value={dueDate}
+                  onChange={e => setDueDate(e.target.value)}
+                  className="text-xs bg-white/[0.04] border border-[var(--border)] rounded-xl px-3 py-2.5 text-[var(--text)] outline-none focus:border-blue-500/40 focus:bg-white/[0.06] focus:ring-4 focus:ring-blue-500/10 transition-all"
+                />
+                {dueDate && (
                   <button
-                    key={p}
                     type="button"
-                    onClick={() => setPriority(p)}
-                    className={`flex-1 text-xs py-2.5 rounded-xl border transition-all font-medium ${
-                      priority === p
-                        ? `${pc.color} ${pc.bg} border-current/30 ring-1 ring-inset ring-current/20`
-                        : 'text-[var(--text-dim)] border-[var(--border)] hover:bg-white/[0.04] hover:text-[var(--text)]'
-                    }`}
+                    onClick={() => setDueDate('')}
+                    title="Remove due date"
+                    className="shrink-0 text-[var(--text-dim)] hover:text-red-400 p-1 rounded-md hover:bg-white/[0.06] transition-colors"
                   >
-                    {pc.label}
+                    <X className="w-3.5 h-3.5" />
                   </button>
-                );
-              })}
+                )}
+              </div>
             </div>
           </div>
 

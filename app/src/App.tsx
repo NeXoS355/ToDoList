@@ -4,15 +4,18 @@ import { invoke } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { listen } from '@tauri-apps/api/event';
-import { MailPlus, Sun, Moon } from 'lucide-react';
+import { MailPlus, Sun, Moon, Monitor } from 'lucide-react';
 import { useIssueStore } from './stores/issueStore';
 import { IssueList } from './components/IssueList/IssueList';
 import { IssueDetail } from './components/IssueDetail/IssueDetail';
 import { NewIssueForm } from './components/NewIssueForm/NewIssueForm';
 import { QuickComposer } from './components/QuickComposer/QuickComposer';
 import { ErrorToast } from './components/ErrorToast/ErrorToast';
+import { NoticeToast } from './components/NoticeToast/NoticeToast';
+import { UndoToast } from './components/UndoToast/UndoToast';
 import { UpdateBanner } from './components/UpdateBanner/UpdateBanner';
 import { parseEmailFile, base64ToBytes, guessTitle, type EmailMeta, type ParsedEmail } from './lib/emailParse';
+import { guessMime } from './lib/types';
 
 interface Draft {
   title: string;
@@ -22,15 +25,29 @@ interface Draft {
 
 const EMAIL_FILE_RE = /\.(eml|msg)$/i;
 
-type Theme = 'light' | 'dark';
+type Theme = 'light' | 'dark' | 'system';
 
-// Initial value matches the pre-paint script in index.html (stored choice → OS pref).
+const THEME_CYCLE: Record<Theme, Theme> = { light: 'dark', dark: 'system', system: 'light' };
+const THEME_LABEL: Record<Theme, string> = { light: 'Light', dark: 'Dark', system: 'System' };
+
+// Stored choice; "system" is the first-start default and tracks the OS
+// preference live. The pre-paint script in index.html resolves the same way.
 function initialTheme(): Theme {
-  return (document.documentElement.getAttribute('data-theme') as Theme) || 'dark';
+  try {
+    const t = localStorage.getItem('theme');
+    if (t === 'light' || t === 'dark' || t === 'system') return t;
+  } catch { /* ignore */ }
+  return 'system';
+}
+
+function resolveTheme(t: Theme): 'light' | 'dark' {
+  return t === 'system'
+    ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+    : t;
 }
 
 export default function App() {
-  const { loadIssues, loadLabels, issues } = useIssueStore();
+  const { loadIssues, loadLabels, issues, selectedId } = useIssueStore();
   const [showNew, setShowNew] = useState(false);
   const [draft, setDraft] = useState<Draft>({ title: '', body: '', meta: null });
   const [dragging, setDragging] = useState(false);
@@ -38,13 +55,19 @@ export default function App() {
   const [theme, setTheme] = useState<Theme>(initialTheme);
 
   // Apply + persist the theme; <html data-theme> drives every CSS variable.
+  // With "system" selected, follow OS preference changes live.
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
+    const apply = () => document.documentElement.setAttribute('data-theme', resolveTheme(theme));
+    apply();
     try { localStorage.setItem('theme', theme); } catch { /* ignore */ }
+    if (theme !== 'system') return;
+    const mq = matchMedia('(prefers-color-scheme: light)');
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
   }, [theme]);
 
   const toggleTheme = useCallback(() => {
-    setTheme(t => (t === 'dark' ? 'light' : 'dark'));
+    setTheme(t => THEME_CYCLE[t]);
   }, []);
 
   useEffect(() => {
@@ -91,15 +114,41 @@ export default function App() {
         setDragging(false);
       } else if (p.type === 'drop') {
         setDragging(false);
-        const path = p.paths.find(f => EMAIL_FILE_RE.test(f));
-        if (!path) return;
+        const emailPath = p.paths.find(f => EMAIL_FILE_RE.test(f));
+        const otherPaths = p.paths.filter(f => !EMAIL_FILE_RE.test(f));
         try {
-          const b64 = await invoke<string>('read_file_base64', { path });
-          const name = path.split(/[\\/]/).pop() ?? path;
-          const parsed = await parseEmailFile(name, base64ToBytes(b64));
-          if (parsed) openFromEmail(parsed);
+          if (emailPath) {
+            const b64 = await invoke<string>('read_file_base64', { path: emailPath });
+            const name = emailPath.split(/[\\/]/).pop() ?? emailPath;
+            const parsed = await parseEmailFile(name, base64ToBytes(b64));
+            if (parsed) openFromEmail(parsed);
+          }
+          if (otherPaths.length) {
+            // Non-email files attach to the currently open issue; without one
+            // there is no sane target, so say so instead of dropping silently.
+            const { selectedId, addAttachment } = useIssueStore.getState();
+            if (selectedId) {
+              const attached: string[] = [];
+              for (const path of otherPaths) {
+                const b64 = await invoke<string>('read_file_base64', { path });
+                const name = path.split(/[\\/]/).pop() ?? path;
+                const bytes = base64ToBytes(b64);
+                const id = await addAttachment(selectedId, new File([bytes], name, { type: guessMime(name) }));
+                if (id) attached.push(name);
+              }
+              if (attached.length) {
+                useIssueStore.setState({
+                  notice: attached.length === 1 ? `"${attached[0]}" attached.` : `${attached.length} files attached.`,
+                });
+              }
+            } else if (!emailPath) {
+              useIssueStore.setState({ error: 'Select an issue first to attach files — or drop a .eml/.msg email to create a task.' });
+            }
+          }
         } catch (err) {
-          console.error('Failed to import dropped email', err);
+          console.error('Failed to handle dropped file', err);
+          // Surface it — a silent drop failure looks like the app ignored the user.
+          useIssueStore.setState({ error: `Could not import dropped file: ${err instanceof Error ? err.message : String(err)}` });
         }
       }
     });
@@ -144,11 +193,11 @@ export default function App() {
         <button
           type="button"
           onClick={toggleTheme}
-          aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-          title={theme === 'dark' ? 'Light mode' : 'Dark mode'}
+          aria-label={`Theme: ${THEME_LABEL[theme]} — switch to ${THEME_LABEL[THEME_CYCLE[theme]]}`}
+          title={`Theme: ${THEME_LABEL[theme]} (click for ${THEME_LABEL[THEME_CYCLE[theme]]})`}
           className="grid place-items-center w-8 h-8 shrink-0 rounded-lg text-[var(--text-dim)] hover:text-[var(--text-bright)] bg-white/[0.04] hover:bg-white/[0.08] border border-[var(--border)] transition-colors"
         >
-          {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+          {theme === 'light' ? <Sun className="w-4 h-4" /> : theme === 'dark' ? <Moon className="w-4 h-4" /> : <Monitor className="w-4 h-4" />}
         </button>
       </header>
 
@@ -180,8 +229,14 @@ export default function App() {
                 <MailPlus className="w-8 h-8 text-[#fff]" />
               </div>
               <div className="text-center">
-                <div className="text-lg font-semibold text-[var(--text-bright)]">Drop email to create a task</div>
-                <div className="text-sm text-[var(--text-dim)] mt-1">.eml or .msg — sender, subject &amp; date are read automatically</div>
+                <div className="text-lg font-semibold text-[var(--text-bright)]">
+                  {selectedId ? 'Drop email or files' : 'Drop email to create a task'}
+                </div>
+                <div className="text-sm text-[var(--text-dim)] mt-1">
+                  {selectedId
+                    ? '.eml/.msg creates a task — other files attach to the open issue'
+                    : '.eml or .msg — sender, subject & date are read automatically'}
+                </div>
               </div>
             </motion.div>
           </motion.div>
@@ -207,6 +262,8 @@ export default function App() {
       </AnimatePresence>
 
       <ErrorToast />
+      <NoticeToast />
+      <UndoToast />
       <UpdateBanner />
     </div>
   );

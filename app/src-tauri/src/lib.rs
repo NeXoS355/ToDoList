@@ -1,6 +1,16 @@
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::Mutex;
+
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Manager, WindowEvent};
+use tauri::{DragDropEvent, Manager, WindowEvent};
+
+/// Paths the user physically dropped onto the window (collected from the
+/// native drag-drop event). `read_file_base64` only serves these (or email
+/// files) — the webview never gets an arbitrary-read primitive.
+#[derive(Default)]
+struct DroppedPaths(Mutex<HashSet<PathBuf>>);
 
 /// Reflect the open-issue count onto the tray icon: the number as a title
 /// (shown on macOS) plus a descriptive tooltip (all platforms).
@@ -12,18 +22,37 @@ fn set_open_count(app: tauri::AppHandle, count: i64) {
     }
 }
 
-/// Read a dropped file's bytes (base64) so the frontend can parse it. Used for
-/// dragging `.eml` / `.msg` email files onto the window — the OS drag only
-/// hands us a path, and the webview can't read arbitrary paths itself.
+/// Read a dropped file's bytes (base64) so the frontend can parse/attach it.
+/// The OS drag only hands us a path, and the webview can't read arbitrary
+/// paths itself.
 #[tauri::command]
-fn read_file_base64(path: String) -> Result<String, String> {
+fn read_file_base64(path: String, dropped: tauri::State<DroppedPaths>) -> Result<String, String> {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
-    // Defense in depth: this is reachable from the webview, so restrict it to
-    // the email file types the drop handler imports — not an arbitrary read.
+    // Defense in depth: this is reachable from the webview, so only serve
+    // email file types (importable without a drop, e.g. via file picker paths
+    // from the drag event) or paths the user actually dropped onto the window
+    // — never an arbitrary read.
     let lower = path.to_lowercase();
-    if !(lower.ends_with(".eml") || lower.ends_with(".msg")) {
+    let is_email = lower.ends_with(".eml") || lower.ends_with(".msg");
+    let was_dropped = dropped
+        .0
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?
+        .contains(std::path::Path::new(&path));
+    if !(is_email || was_dropped) {
         return Err("unsupported file type".into());
     }
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    Ok(STANDARD.encode(bytes))
+}
+
+/// Read a stored attachment's bytes (base64) — bounded to the attachments
+/// dir via `safe_rel`. Used to render pasted images inline in Markdown.
+#[tauri::command]
+fn read_attachment_base64(app: tauri::AppHandle, rel_path: String) -> Result<String, String> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    safe_rel(&rel_path)?;
+    let path = attachments_dir(&app)?.join(&rel_path);
     let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
     Ok(STANDARD.encode(bytes))
 }
@@ -182,9 +211,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         // No migrations — the frontend creates the schema on first connect.
         .plugin(tauri_plugin_sql::Builder::default().build())
+        .manage(DroppedPaths::default())
         .invoke_handler(tauri::generate_handler![
             set_open_count,
             read_file_base64,
+            read_attachment_base64,
             launched_quick_add,
             save_attachment,
             export_attachment,
@@ -240,11 +271,22 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Close button hides to tray instead of quitting; real quit is the
-            // tray's Quit item. Keeps the open-count badge available in background.
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                let _ = window.hide();
-                api.prevent_close();
+            match event {
+                // Close button hides to tray instead of quitting; real quit is
+                // the tray's Quit item. Keeps the open-count badge available in
+                // the background.
+                WindowEvent::CloseRequested { api, .. } => {
+                    let _ = window.hide();
+                    api.prevent_close();
+                }
+                // Remember what was actually dropped so read_file_base64 can
+                // verify the frontend only reads user-dropped files.
+                WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) => {
+                    if let Ok(mut set) = window.app_handle().state::<DroppedPaths>().0.lock() {
+                        set.extend(paths.iter().cloned());
+                    }
+                }
+                _ => {}
             }
         })
         .run(tauri::generate_context!())

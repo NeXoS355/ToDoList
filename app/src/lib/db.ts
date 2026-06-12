@@ -16,6 +16,10 @@ async function getDb() {
       const s = stmt.trim();
       if (s) await conn.execute(s);
     }
+    // CREATE TABLE IF NOT EXISTS won't add columns to pre-existing DBs, so new
+    // columns also get an ALTER here; "duplicate column" errors are expected.
+    await conn.execute('ALTER TABLE issues ADD COLUMN due_date INTEGER').catch(() => {});
+    await conn.execute('ALTER TABLE attachments ADD COLUMN checksum TEXT').catch(() => {});
     db = conn;
   }
   return db;
@@ -27,9 +31,8 @@ function uuid(): string {
 
 export async function getIssues(): Promise<Issue[]> {
   const db = await getDb();
-  // Sort: status (in_progress → open → done → cancelled), then priority
-  // (critical → low), then newest first. Mirrored by sortIssues() in the store
-  // so client-side patches stay in the same order without a reload.
+  // Rough pre-sort only — the store re-sorts via sortIssues() after loading
+  // (it additionally ranks overdue/due dates, which needs the local timezone).
   const issues = await db.select<Issue[]>(`
     SELECT i.*,
       (SELECT COUNT(*) FROM comments c WHERE c.issue_id = i.id) as comment_count
@@ -74,14 +77,15 @@ export async function createIssue(data: {
   labelIds?: string[];
   source?: string | null;
   sourceMeta?: Record<string, unknown> | null;
+  dueDate?: number | null;
 }): Promise<Issue> {
   const db = await getDb();
   const id = uuid();
   const now = Date.now();
   const sourceMeta = data.sourceMeta ? JSON.stringify(data.sourceMeta) : null;
   await db.execute(
-    'INSERT INTO issues (id, title, body, priority, status, created_at, updated_at, source, source_meta) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, data.title, data.body, data.priority, 'open', now, now, data.source ?? null, sourceMeta]
+    'INSERT INTO issues (id, title, body, priority, status, created_at, updated_at, source, source_meta, due_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [id, data.title, data.body, data.priority, 'open', now, now, data.source ?? null, sourceMeta, data.dueDate ?? null]
   );
   if (data.labelIds?.length) {
     for (const lid of data.labelIds) {
@@ -91,9 +95,9 @@ export async function createIssue(data: {
   return (await getIssue(id))!;
 }
 
-const UPDATABLE_COLUMNS = ['title', 'body', 'priority', 'status'] as const;
+const UPDATABLE_COLUMNS = ['title', 'body', 'priority', 'status', 'due_date'] as const;
 
-export async function updateIssue(id: string, data: Partial<Pick<Issue, 'title' | 'body' | 'priority' | 'status'>>): Promise<void> {
+export async function updateIssue(id: string, data: Partial<Pick<Issue, 'title' | 'body' | 'priority' | 'status' | 'due_date'>>): Promise<void> {
   const db = await getDb();
   // Whitelist column names so they can never become an injection vector, even
   // if a caller passes unexpected keys (values stay parameterized regardless).
@@ -141,12 +145,24 @@ export async function addAttachment(opts: {
   mimeType: string | null;
   relPath: string;
   size: number;
+  checksum?: string | null;
 }): Promise<void> {
   const db = await getDb();
   await db.execute(
-    'INSERT INTO attachments (id, issue_id, comment_id, filename, mime_type, rel_path, size_bytes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [opts.id, opts.issueId ?? null, opts.commentId ?? null, opts.filename, opts.mimeType, opts.relPath, opts.size, Date.now()]
+    'INSERT INTO attachments (id, issue_id, comment_id, filename, mime_type, rel_path, size_bytes, checksum, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [opts.id, opts.issueId ?? null, opts.commentId ?? null, opts.filename, opts.mimeType, opts.relPath, opts.size, opts.checksum ?? null, Date.now()]
   );
+}
+
+/** Filename of an attachment on this issue with identical bytes, or null.
+ *  Covers issue-level and comment attachments alike (same issue_id). */
+export async function findAttachmentByChecksum(issueId: string, checksum: string): Promise<string | null> {
+  const db = await getDb();
+  const rows = await db.select<{ filename: string }[]>(
+    'SELECT filename FROM attachments WHERE issue_id = ? AND checksum = ? LIMIT 1',
+    [issueId, checksum]
+  );
+  return rows[0]?.filename ?? null;
 }
 
 /** Metadata only (no bytes) — cheap to load for listing. */
