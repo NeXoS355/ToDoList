@@ -1,8 +1,8 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { useState, useRef, useEffect } from 'react';
-import { Trash2, CircleDot, Clock, CircleCheck, XCircle, ChevronDown, Paperclip, FileText, Download, ExternalLink, Mail, Plus, Check, X, Tag, CalendarDays } from 'lucide-react';
-import type { Status, Priority } from '../../lib/types';
-import { PRIORITY_CONFIG, STATUS_CONFIG, formatBytes, isOverdue, dueDateToInputValue, inputValueToDueDate, clipboardImages } from '../../lib/types';
+import { Trash2, CircleDot, Clock, CircleCheck, XCircle, ChevronDown, Paperclip, FileText, Download, ExternalLink, Mail, Plus, Check, X, Tag, CalendarDays, Repeat } from 'lucide-react';
+import type { Status, Priority, RecurrenceFreq } from '../../lib/types';
+import { PRIORITY_CONFIG, STATUS_CONFIG, formatBytes, isOverdue, dueDateToInputValue, inputValueToDueDate, dueDatePresets, makeRecurrence, recurrenceFreq, recurrenceLabel, RECURRENCE_OPTIONS, startOfToday, clipboardImages } from '../../lib/types';
 import { readEmailMeta } from '../../lib/emailParse';
 import { useIssueStore } from '../../stores/issueStore';
 import { CommentBox } from '../CommentBox/CommentBox';
@@ -29,26 +29,29 @@ export function IssueDetail() {
   const [showPriorityMenu, setShowPriorityMenu] = useState(false);
   const [showLabelMenu, setShowLabelMenu] = useState(false);
   const [showDueMenu, setShowDueMenu] = useState(false);
+  const [showRepeatMenu, setShowRepeatMenu] = useState(false);
   const [newLabel, setNewLabel] = useState('');
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const statusMenuRef = useRef<HTMLDivElement>(null);
   const priorityMenuRef = useRef<HTMLDivElement>(null);
   const labelMenuRef = useRef<HTMLDivElement>(null);
   const dueMenuRef = useRef<HTMLDivElement>(null);
+  const repeatMenuRef = useRef<HTMLDivElement>(null);
 
   // Close any open picker when clicking outside its container.
   useEffect(() => {
-    if (!showStatusMenu && !showPriorityMenu && !showLabelMenu && !showDueMenu) return;
+    if (!showStatusMenu && !showPriorityMenu && !showLabelMenu && !showDueMenu && !showRepeatMenu) return;
     const onDown = (e: MouseEvent) => {
       const t = e.target as Node;
       if (statusMenuRef.current && !statusMenuRef.current.contains(t)) setShowStatusMenu(false);
       if (priorityMenuRef.current && !priorityMenuRef.current.contains(t)) setShowPriorityMenu(false);
       if (labelMenuRef.current && !labelMenuRef.current.contains(t)) setShowLabelMenu(false);
       if (dueMenuRef.current && !dueMenuRef.current.contains(t)) setShowDueMenu(false);
+      if (repeatMenuRef.current && !repeatMenuRef.current.contains(t)) setShowRepeatMenu(false);
     };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
-  }, [showStatusMenu, showPriorityMenu, showLabelMenu, showDueMenu]);
+  }, [showStatusMenu, showPriorityMenu, showLabelMenu, showDueMenu, showRepeatMenu]);
 
   // Inline title/body editing — click either to edit, commit on blur/Enter.
   const [editingTitle, setEditingTitle] = useState(false);
@@ -64,6 +67,7 @@ export function IssueDetail() {
     setShowPriorityMenu(false);
     setShowLabelMenu(false);
     setShowDueMenu(false);
+    setShowRepeatMenu(false);
     setNewLabel('');
   }, [selectedId]);
 
@@ -101,11 +105,29 @@ export function IssueDetail() {
     await deleteIssue(issue.id);
   };
 
-  // Update without closing — date inputs fire change per segment while typing;
-  // the popover closes on outside click (or via the Remove button).
+  // Update without closing the popover; the native calendar is dismissed by
+  // blurring the input on change (see the date input's onChange).
   const handleDueChange = async (value: string) => {
     if (!issue) return;
     await updateIssue(issue.id, { due_date: inputValueToDueDate(value) });
+  };
+
+  // Preset click: set the date and close in one step.
+  const handleDuePreset = async (ts: number) => {
+    if (!issue) return;
+    await updateIssue(issue.id, { due_date: ts });
+    setShowDueMenu(false);
+  };
+
+  // Change the repeat rule. A recurrence needs a due_date anchor, so enabling
+  // one without a due date sets it to today.
+  const handleRepeatChange = async (freq: RecurrenceFreq | 'none') => {
+    if (!issue) return;
+    const recurrence = makeRecurrence(freq);
+    await updateIssue(issue.id, recurrence && issue.due_date == null
+      ? { recurrence, due_date: startOfToday() }
+      : { recurrence });
+    setShowRepeatMenu(false);
   };
 
   // Paste an image while editing the body: store it as an attachment and drop
@@ -249,7 +271,7 @@ export function IssueDetail() {
                 {/* Due date picker */}
                 <div ref={dueMenuRef} className="relative">
                   <button
-                    onClick={() => { setShowDueMenu(v => !v); setShowStatusMenu(false); setShowPriorityMenu(false); setShowLabelMenu(false); }}
+                    onClick={() => { setShowDueMenu(v => !v); setShowStatusMenu(false); setShowPriorityMenu(false); setShowLabelMenu(false); setShowRepeatMenu(false); }}
                     className={`text-xs flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[var(--border-strong)] hover:bg-white/[0.06] bg-white/[0.03] transition-colors ${isOverdue(issue) ? 'text-red-400' : issue.due_date != null ? 'text-[var(--text)]' : 'text-[var(--text-dim)]'}`}
                   >
                     <CalendarDays className="w-3.5 h-3.5" />
@@ -262,23 +284,83 @@ export function IssueDetail() {
                         initial={{ opacity: 0, y: -4 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -4 }}
-                        className="absolute top-full left-0 mt-2 z-20 bg-[var(--surface-2)] border border-[var(--border-strong)] rounded-xl shadow-2xl shadow-black/40 min-w-44 p-2 flex flex-col gap-1"
+                        className="absolute top-full left-0 mt-2 z-20 bg-[var(--surface-2)] border border-[var(--border-strong)] rounded-xl shadow-2xl shadow-black/40 min-w-56 p-2 flex flex-col gap-1.5"
                       >
+                        <div className="grid grid-cols-2 gap-1">
+                          {dueDatePresets().map(p => (
+                            <button
+                              key={p.label}
+                              onClick={() => handleDuePreset(p.ts)}
+                              className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors text-center ${issue.due_date === p.ts ? 'border-blue-500/50 bg-blue-500/15 text-[var(--text)]' : 'border-[var(--border)] bg-white/[0.04] hover:bg-white/[0.08] hover:border-blue-500/40 text-[var(--text)]'}`}
+                            >
+                              {p.label}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="flex items-center gap-2 px-0.5">
+                          <span className="h-px flex-1 bg-[var(--border)]" />
+                          <span className="text-[10px] uppercase tracking-wide text-[var(--text-dim)]">or pick a date</span>
+                          <span className="h-px flex-1 bg-[var(--border)]" />
+                        </div>
                         <input
                           type="date"
-                          autoFocus
                           value={issue.due_date != null ? dueDateToInputValue(issue.due_date) : ''}
-                          onChange={e => handleDueChange(e.target.value)}
+                          onChange={e => { handleDueChange(e.target.value); if (e.target.value) e.target.blur(); }}
+                          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); setShowDueMenu(false); } }}
                           className="text-xs bg-white/[0.04] border border-[var(--border)] rounded-lg px-2.5 py-2 text-[var(--text)] outline-none focus:border-blue-500/40 transition-colors"
                         />
-                        {issue.due_date != null && (
+                        <div className="flex items-center gap-1 pt-0.5">
+                          {issue.due_date != null && (
+                            <button
+                              onClick={() => { handleDueChange(''); setShowDueMenu(false); }}
+                              className="px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1.5 hover:bg-white/[0.06] transition-colors text-[var(--text-dim)] hover:text-red-400"
+                            >
+                              <X className="w-3.5 h-3.5" /> Remove
+                            </button>
+                          )}
                           <button
-                            onClick={() => { handleDueChange(''); setShowDueMenu(false); }}
-                            className="w-full text-left px-2.5 py-2 rounded-lg text-xs flex items-center gap-2 hover:bg-white/[0.06] transition-colors text-[var(--text-dim)] hover:text-red-400"
+                            onClick={() => setShowDueMenu(false)}
+                            className="ml-auto px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 bg-blue-500/15 border border-blue-500/40 text-blue-300 hover:bg-blue-500/25 transition-colors"
                           >
-                            <X className="w-3.5 h-3.5" /> Remove due date
+                            <Check className="w-3.5 h-3.5" /> Done
                           </button>
-                        )}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+
+                {/* Repeat rule — spawns the next occurrence when completed. */}
+                <div ref={repeatMenuRef} className="relative">
+                  <button
+                    onClick={() => { setShowRepeatMenu(v => !v); setShowStatusMenu(false); setShowPriorityMenu(false); setShowLabelMenu(false); setShowDueMenu(false); }}
+                    title="Repeat this task"
+                    className={`text-xs flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[var(--border-strong)] hover:bg-white/[0.06] bg-white/[0.03] transition-colors ${issue.recurrence ? 'text-[var(--text)]' : 'text-[var(--text-dim)]'}`}
+                  >
+                    <Repeat className={`w-3.5 h-3.5 ${issue.recurrence ? 'text-blue-400' : ''}`} />
+                    <span>{recurrenceLabel(issue.recurrence) ?? 'Repeat'}</span>
+                    <ChevronDown className="w-3 h-3 text-slate-500" />
+                  </button>
+                  <AnimatePresence>
+                    {showRepeatMenu && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -4 }}
+                        className="absolute top-full left-0 mt-2 z-20 bg-[var(--surface-2)] border border-[var(--border-strong)] rounded-xl shadow-2xl shadow-black/40 overflow-hidden min-w-40 p-1"
+                      >
+                        {RECURRENCE_OPTIONS.map(o => {
+                          const active = recurrenceFreq(issue.recurrence) === o.value;
+                          return (
+                            <button
+                              key={o.value}
+                              onClick={() => handleRepeatChange(o.value)}
+                              className={`w-full text-left px-2.5 py-2 rounded-lg text-xs hover:bg-white/[0.06] transition-colors ${active ? 'text-blue-300 bg-blue-500/10' : 'text-[var(--text)]'}`}
+                            >
+                              {o.label}
+                            </button>
+                          );
+                        })}
                       </motion.div>
                     )}
                   </AnimatePresence>

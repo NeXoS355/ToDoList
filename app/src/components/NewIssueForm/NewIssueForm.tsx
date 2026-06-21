@@ -1,8 +1,8 @@
 import { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Paperclip, FileText, Check, Mail, Clock, Plus, CalendarDays } from 'lucide-react';
-import type { Priority, Label } from '../../lib/types';
-import { PRIORITY_CONFIG, formatBytes, inputValueToDueDate, clipboardImages } from '../../lib/types';
+import { X, Paperclip, FileText, Check, Mail, Clock, Plus, CalendarDays, Repeat } from 'lucide-react';
+import type { Priority, Label, RecurrenceFreq } from '../../lib/types';
+import { PRIORITY_CONFIG, formatBytes, inputValueToDueDate, dueDateToInputValue, dueDatePresets, makeRecurrence, RECURRENCE_OPTIONS, startOfToday, clipboardImages } from '../../lib/types';
 import { useIssueStore } from '../../stores/issueStore';
 import { parseEmailSmart, parseEmailFile, guessTitle, type EmailMeta, type ParsedEmail } from '../../lib/emailParse';
 import { MarkdownToolbar } from '../Markdown/MarkdownToolbar';
@@ -20,6 +20,7 @@ export function NewIssueForm({ onClose, initialTitle = '', initialBody = '', ini
   const [body, setBody] = useState(initialBody);
   const [priority, setPriority] = useState<Priority>('medium');
   const [dueDate, setDueDate] = useState(''); // <input type="date"> value, '' = none
+  const [repeat, setRepeat] = useState<RecurrenceFreq | 'none'>('none');
   const [selectedLabels, setSelectedLabels] = useState<string[]>([]);
   const [newLabel, setNewLabel] = useState('');
   const [files, setFiles] = useState<File[]>([]);
@@ -98,13 +99,20 @@ export function NewIssueForm({ onClose, initialTitle = '', initialBody = '', ini
     setNewLabel('');
   };
 
+  // Due date + recurrence as create/update args. A recurrence needs a due_date
+  // anchor, so repeating without an explicit date falls back to today.
+  const scheduleArgs = () => ({
+    dueDate: inputValueToDueDate(dueDate) ?? (repeat !== 'none' ? startOfToday() : null),
+    recurrence: makeRecurrence(repeat),
+  });
+
   // Enter on the title: commit the task immediately and drop into the
   // description so details are optional, not blocking.
   const handleTitleEnter = async () => {
     if (createdId) { textareaRef.current?.focus(); return; }
     if (!title.trim()) return;
     setBusy(true);
-    const id = await createIssue({ title: title.trim(), body, priority, labelIds: selectedLabels, dueDate: inputValueToDueDate(dueDate), ...sourceArgs });
+    const id = await createIssue({ title: title.trim(), body, priority, labelIds: selectedLabels, ...scheduleArgs(), ...sourceArgs });
     setBusy(false);
     if (!id) return; // create failed — toast already shown, keep the form open
     setCreatedId(id);
@@ -118,10 +126,11 @@ export function NewIssueForm({ onClose, initialTitle = '', initialBody = '', ini
     let id = createdId;
     if (!id) {
       if (!title.trim()) { onClose(); return; }
-      id = await createIssue({ title: title.trim(), body, priority, labelIds: selectedLabels, dueDate: inputValueToDueDate(dueDate), ...sourceArgs });
+      id = await createIssue({ title: title.trim(), body, priority, labelIds: selectedLabels, ...scheduleArgs(), ...sourceArgs });
       if (!id) { setBusy(false); return; } // create failed — keep form open
     } else {
-      await updateIssue(id, { title: title.trim() || '(untitled)', body, priority, due_date: inputValueToDueDate(dueDate) });
+      const sched = scheduleArgs();
+      await updateIssue(id, { title: title.trim() || '(untitled)', body, priority, due_date: sched.dueDate, recurrence: sched.recurrence });
       await setIssueLabels(id, selectedLabels);
     }
     for (const f of files) await addAttachment(id, f);
@@ -280,7 +289,7 @@ export function NewIssueForm({ onClose, initialTitle = '', initialBody = '', ini
                 <input
                   type="date"
                   value={dueDate}
-                  onChange={e => setDueDate(e.target.value)}
+                  onChange={e => { setDueDate(e.target.value); if (e.target.value) e.target.blur(); }}
                   className="text-xs bg-white/[0.04] border border-[var(--border)] rounded-xl px-3 py-2.5 text-[var(--text)] outline-none focus:border-blue-500/40 focus:bg-white/[0.06] focus:ring-4 focus:ring-blue-500/10 transition-all"
                 />
                 {dueDate && (
@@ -294,6 +303,37 @@ export function NewIssueForm({ onClose, initialTitle = '', initialBody = '', ini
                   </button>
                 )}
               </div>
+              <div className="flex flex-wrap gap-1 mt-1.5">
+                {dueDatePresets().map(p => {
+                  const val = dueDateToInputValue(p.ts);
+                  return (
+                    <button
+                      key={p.label}
+                      type="button"
+                      onClick={() => setDueDate(val)}
+                      className={`text-[11px] px-2 py-1 rounded-md border transition-colors ${dueDate === val ? 'border-blue-500/50 bg-blue-500/15 text-[var(--text)]' : 'border-[var(--border)] bg-white/[0.03] hover:bg-white/[0.07] hover:border-blue-500/40 text-[var(--text-dim)] hover:text-[var(--text)]'}`}
+                    >
+                      {p.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-dim)] mt-3 mb-2 flex items-center gap-1.5">
+                <Repeat className="w-3.5 h-3.5" /> Repeat
+              </label>
+              <select
+                value={repeat}
+                onChange={e => setRepeat(e.target.value as RecurrenceFreq | 'none')}
+                className="text-xs bg-white/[0.04] border border-[var(--border)] rounded-xl px-3 py-2.5 text-[var(--text)] outline-none focus:border-blue-500/40 focus:bg-white/[0.06] focus:ring-4 focus:ring-blue-500/10 transition-all w-full"
+              >
+                {RECURRENCE_OPTIONS.map(o => (
+                  <option key={o.value} value={o.value} className="bg-[var(--surface-2)]">{o.label}</option>
+                ))}
+              </select>
+              {repeat !== 'none' && !dueDate && (
+                <p className="text-[11px] text-[var(--text-dim)] mt-1.5">Starts today — next one auto-created when done.</p>
+              )}
             </div>
           </div>
 

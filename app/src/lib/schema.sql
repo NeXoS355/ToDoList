@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS issues (
   updated_at  INTEGER NOT NULL,
   source      TEXT,
   source_meta TEXT,
-  due_date    INTEGER
+  due_date    INTEGER,
+  recurrence  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS comments (
