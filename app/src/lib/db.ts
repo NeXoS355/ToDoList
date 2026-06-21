@@ -19,6 +19,7 @@ async function getDb() {
     // CREATE TABLE IF NOT EXISTS won't add columns to pre-existing DBs, so new
     // columns also get an ALTER here; "duplicate column" errors are expected.
     await conn.execute('ALTER TABLE issues ADD COLUMN due_date INTEGER').catch(() => {});
+    await conn.execute('ALTER TABLE issues ADD COLUMN recurrence TEXT').catch(() => {});
     await conn.execute('ALTER TABLE attachments ADD COLUMN checksum TEXT').catch(() => {});
     db = conn;
   }
@@ -78,14 +79,15 @@ export async function createIssue(data: {
   source?: string | null;
   sourceMeta?: Record<string, unknown> | null;
   dueDate?: number | null;
+  recurrence?: string | null;
 }): Promise<Issue> {
   const db = await getDb();
   const id = uuid();
   const now = Date.now();
   const sourceMeta = data.sourceMeta ? JSON.stringify(data.sourceMeta) : null;
   await db.execute(
-    'INSERT INTO issues (id, title, body, priority, status, created_at, updated_at, source, source_meta, due_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, data.title, data.body, data.priority, 'open', now, now, data.source ?? null, sourceMeta, data.dueDate ?? null]
+    'INSERT INTO issues (id, title, body, priority, status, created_at, updated_at, source, source_meta, due_date, recurrence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [id, data.title, data.body, data.priority, 'open', now, now, data.source ?? null, sourceMeta, data.dueDate ?? null, data.recurrence ?? null]
   );
   if (data.labelIds?.length) {
     for (const lid of data.labelIds) {
@@ -95,9 +97,9 @@ export async function createIssue(data: {
   return (await getIssue(id))!;
 }
 
-const UPDATABLE_COLUMNS = ['title', 'body', 'priority', 'status', 'due_date'] as const;
+const UPDATABLE_COLUMNS = ['title', 'body', 'priority', 'status', 'due_date', 'recurrence'] as const;
 
-export async function updateIssue(id: string, data: Partial<Pick<Issue, 'title' | 'body' | 'priority' | 'status' | 'due_date'>>): Promise<void> {
+export async function updateIssue(id: string, data: Partial<Pick<Issue, 'title' | 'body' | 'priority' | 'status' | 'due_date' | 'recurrence'>>): Promise<void> {
   const db = await getDb();
   // Whitelist column names so they can never become an injection vector, even
   // if a caller passes unexpected keys (values stay parameterized regardless).

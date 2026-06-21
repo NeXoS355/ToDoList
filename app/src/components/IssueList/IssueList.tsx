@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { CircleDot, CircleCheck, Clock, XCircle, MessageSquare, AlertCircle, ChevronRight, Search, CalendarDays, X, Trash2 } from 'lucide-react';
+import { CircleDot, CircleCheck, Clock, XCircle, MessageSquare, AlertCircle, ChevronRight, Search, CalendarDays, X, Trash2, Repeat } from 'lucide-react';
 import type { Status, Issue } from '../../lib/types';
-import { PRIORITY_CONFIG, isOverdue, startOfToday } from '../../lib/types';
+import { PRIORITY_CONFIG, isOverdue, startOfToday, recurrenceLabel } from '../../lib/types';
 import { useIssueStore, useFilteredIssues } from '../../stores/issueStore';
 
 const STATUS_ICONS: Record<Status, React.ReactNode> = {
@@ -131,6 +131,11 @@ function IssueRow({ issue }: { issue: Issue }) {
           {issue.due_date != null && (
             <span className={`text-[11px] flex items-center gap-1 ${dueClass(issue)}`} title={`Due ${new Date(issue.due_date).toLocaleDateString('de-DE')}`}>
               <CalendarDays className="w-3 h-3" /> {formatDue(issue.due_date)}
+            </span>
+          )}
+          {recurrenceLabel(issue.recurrence) && (
+            <span className="text-[11px] flex items-center text-[var(--text-dim)]" title={`Repeats ${recurrenceLabel(issue.recurrence)}`}>
+              <Repeat className="w-3 h-3" />
             </span>
           )}
           {issue.labels?.map(l => (

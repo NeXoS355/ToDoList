@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { invoke } from '@tauri-apps/api/core';
 import type { Issue, Comment, Label, Attachment, Priority, Status } from '../lib/types';
-import { formatBytes, isOverdue } from '../lib/types';
+import { formatBytes, isOverdue, parseRecurrence, nextDueDateAfter, startOfToday } from '../lib/types';
 import * as db from '../lib/db';
 
 // Hard cap on attachment size — bytes go to disk, but an unbounded file would
@@ -62,8 +62,8 @@ interface IssueStore {
   loadIssues: () => Promise<void>;
   loadLabels: () => Promise<void>;
   selectIssue: (id: string | null) => Promise<void>;
-  createIssue: (data: { title: string; body: string; priority: Priority; labelIds?: string[]; source?: string | null; sourceMeta?: Record<string, unknown> | null; dueDate?: number | null }) => Promise<string | null>;
-  updateIssue: (id: string, data: Partial<Pick<Issue, 'title' | 'body' | 'priority' | 'status' | 'due_date'>>) => Promise<void>;
+  createIssue: (data: { title: string; body: string; priority: Priority; labelIds?: string[]; source?: string | null; sourceMeta?: Record<string, unknown> | null; dueDate?: number | null; recurrence?: string | null }) => Promise<string | null>;
+  updateIssue: (id: string, data: Partial<Pick<Issue, 'title' | 'body' | 'priority' | 'status' | 'due_date' | 'recurrence'>>) => Promise<void>;
   deleteIssue: (id: string) => Promise<void>;
   clearDone: () => Promise<void>;
   undoDelete: () => void;
@@ -88,6 +88,11 @@ export const useIssueStore = create<IssueStore>((set, get) => {
   const fail = (e: unknown) => set({ error: e instanceof Error ? e.message : String(e) });
 
   let undoTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Links the most recently completed recurring task to the follow-up it spawned,
+  // so re-opening that task (undo of the completion) can remove the follow-up and
+  // restore the rule. Single-slot, like pendingUndo — only the latest matters.
+  let recurSpawn: { sourceId: string; spawnId: string; recurrence: string } | null = null;
 
   // Perform the deferred DB deletes for the pending undo (if any). Each DB row
   // cascades comments/attachment rows; the attachment bytes on disk are
@@ -121,6 +126,52 @@ export const useIssueStore = create<IssueStore>((set, get) => {
       ...(s.selectedId && ids.has(s.selectedId) ? { selectedId: null, comments: [], attachments: [] } : {}),
     }));
     undoTimer = setTimeout(() => { void flushPendingDelete(); }, UNDO_WINDOW_MS);
+  };
+
+  // A recurring task was just completed → create its next occurrence (fixed,
+  // due-anchored: next due = old due + interval) as a fresh open issue, and move
+  // the rule onto it so the completed one becomes plain history that can't
+  // re-spawn. Needs a due_date as the anchor; without one, nothing happens.
+  const spawnNextOccurrence = async (issue: Issue) => {
+    const rec = parseRecurrence(issue.recurrence);
+    if (!rec || issue.due_date == null) return;
+    try {
+      const spawn = await db.createIssue({
+        title: issue.title,
+        body: issue.body,
+        priority: issue.priority,
+        labelIds: (issue.labels ?? []).map(l => l.id),
+        source: issue.source,
+        sourceMeta: issue.source_meta ? JSON.parse(issue.source_meta) : null,
+        dueDate: nextDueDateAfter(issue.due_date, rec, startOfToday()),
+        recurrence: issue.recurrence,
+      });
+      // Strip the rule from the completed task so re-toggling can't spawn again.
+      await db.updateIssue(issue.id, { recurrence: null });
+      recurSpawn = { sourceId: issue.id, spawnId: spawn.id, recurrence: issue.recurrence! };
+      set(s => ({ issues: sortIssues([spawn, ...s.issues.map(i => (i.id === issue.id ? { ...i, recurrence: null } : i))]) }));
+    } catch (e) {
+      fail(e);
+    }
+  };
+
+  // Reverse of spawnNextOccurrence when a completion is undone (done → not done):
+  // delete the follow-up and put the rule back on the re-opened task.
+  const revertSpawn = async () => {
+    if (!recurSpawn) return;
+    const { sourceId, spawnId, recurrence } = recurSpawn;
+    recurSpawn = null;
+    try {
+      await db.updateIssue(sourceId, { recurrence });
+      const orphans = await db.getAttachments(spawnId);
+      await db.deleteIssue(spawnId);
+      for (const att of orphans) {
+        if (att.rel_path) await invoke('delete_attachment_file', { relPath: att.rel_path }).catch(() => {});
+      }
+      set(s => ({ issues: s.issues.filter(i => i.id !== spawnId).map(i => (i.id === sourceId ? { ...i, recurrence } : i)) }));
+    } catch (e) {
+      fail(e);
+    }
   };
 
   // Write one file's bytes to disk (via Rust) and record it in the DB. Shared by
@@ -206,10 +257,20 @@ export const useIssueStore = create<IssueStore>((set, get) => {
 
     updateIssue: async (id, data) => {
       try {
+        const before = get().issues.find(i => i.id === id);
         await db.updateIssue(id, data);
         // status/priority changes move the row, so re-sort after patching.
         const now = Date.now();
         set(s => ({ issues: sortIssues(s.issues.map(i => (i.id === id ? { ...i, ...data, updated_at: now } : i))) }));
+
+        // Recurring task lifecycle around the done transition.
+        if (data.status && before && data.status !== before.status) {
+          if (data.status === 'done' && before.status !== 'done') {
+            await spawnNextOccurrence(before);
+          } else if (before.status === 'done' && recurSpawn?.sourceId === id) {
+            await revertSpawn(); // completion undone → drop the follow-up
+          }
+        }
       } catch (e) {
         fail(e);
       }
