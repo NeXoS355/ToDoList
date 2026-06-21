@@ -1,8 +1,8 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Paperclip, FileText, Check, Mail, Clock, Plus, CalendarDays, Repeat } from 'lucide-react';
+import { X, Paperclip, FileText, Check, Mail, Clock, Plus, CalendarDays, Repeat, ChevronDown } from 'lucide-react';
 import type { Priority, Label, RecurrenceFreq } from '../../lib/types';
-import { PRIORITY_CONFIG, formatBytes, inputValueToDueDate, dueDateToInputValue, dueDatePresets, makeRecurrence, RECURRENCE_OPTIONS, startOfToday, clipboardImages } from '../../lib/types';
+import { PRIORITY_CONFIG, formatBytes, inputValueToDueDate, dueDateToInputValue, dueDatePresets, makeRecurrence, parseRecurrence, nextDueDateAfter, RECURRENCE_OPTIONS, startOfToday, clipboardImages } from '../../lib/types';
 import { useIssueStore } from '../../stores/issueStore';
 import { parseEmailSmart, parseEmailFile, guessTitle, type EmailMeta, type ParsedEmail } from '../../lib/emailParse';
 import { MarkdownToolbar } from '../Markdown/MarkdownToolbar';
@@ -21,6 +21,12 @@ export function NewIssueForm({ onClose, initialTitle = '', initialBody = '', ini
   const [priority, setPriority] = useState<Priority>('medium');
   const [dueDate, setDueDate] = useState(''); // <input type="date"> value, '' = none
   const [repeat, setRepeat] = useState<RecurrenceFreq | 'none'>('none');
+  const [showDueMenu, setShowDueMenu] = useState(false);
+  const [showPriorityMenu, setShowPriorityMenu] = useState(false);
+  const [showRepeatMenu, setShowRepeatMenu] = useState(false);
+  const dueMenuRef = useRef<HTMLDivElement>(null);
+  const priorityMenuRef = useRef<HTMLDivElement>(null);
+  const repeatMenuRef = useRef<HTMLDivElement>(null);
   const [selectedLabels, setSelectedLabels] = useState<string[]>([]);
   const [newLabel, setNewLabel] = useState('');
   const [files, setFiles] = useState<File[]>([]);
@@ -30,6 +36,19 @@ export function NewIssueForm({ onClose, initialTitle = '', initialBody = '', ini
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const emailInputRef = useRef<HTMLInputElement>(null);
+
+  // Close any open picker popover when clicking outside its container.
+  useEffect(() => {
+    if (!showDueMenu && !showPriorityMenu && !showRepeatMenu) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (dueMenuRef.current && !dueMenuRef.current.contains(t)) setShowDueMenu(false);
+      if (priorityMenuRef.current && !priorityMenuRef.current.contains(t)) setShowPriorityMenu(false);
+      if (repeatMenuRef.current && !repeatMenuRef.current.contains(t)) setShowRepeatMenu(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [showDueMenu, showPriorityMenu, showRepeatMenu]);
 
   const onFilesPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFiles(prev => [...prev, ...Array.from(e.target.files ?? [])]);
@@ -256,86 +275,165 @@ export function NewIssueForm({ onClose, initialTitle = '', initialBody = '', ini
             </p>
           </div>
 
-          {/* Priority + Due date */}
-          <div className="flex gap-4">
-            <div className="flex-1">
+          {/* Priority · Due date · Repeat — three popover pills in one row */}
+          <div className="flex gap-3 items-start">
+            {/* Priority */}
+            <div ref={priorityMenuRef} className="flex-1 relative">
               <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-dim)] mb-2 block">Priority</label>
-              <div className="flex gap-2">
-                {(Object.keys(PRIORITY_CONFIG) as Priority[]).map(p => {
-                  const pc = PRIORITY_CONFIG[p];
-                  return (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => setPriority(p)}
-                      className={`flex-1 text-xs py-2.5 rounded-xl border transition-all font-medium ${
-                        priority === p
-                          ? `${pc.color} ${pc.bg} border-current/30 ring-1 ring-inset ring-current/20`
-                          : 'text-[var(--text-dim)] border-[var(--border)] hover:bg-white/[0.04] hover:text-[var(--text)]'
-                      }`}
-                    >
-                      {pc.label}
-                    </button>
-                  );
-                })}
-              </div>
+              <button
+                type="button"
+                onClick={() => { setShowPriorityMenu(v => !v); setShowDueMenu(false); setShowRepeatMenu(false); }}
+                className="w-full text-xs flex items-center gap-1.5 px-3 py-2.5 rounded-xl border border-[var(--border)] hover:bg-white/[0.06] bg-white/[0.04] transition-colors"
+              >
+                <span className={`w-1.5 h-1.5 rounded-full bg-current ${PRIORITY_CONFIG[priority].color}`} />
+                <span className={`font-medium ${PRIORITY_CONFIG[priority].color}`}>{PRIORITY_CONFIG[priority].label}</span>
+                <ChevronDown className="w-3 h-3 text-slate-500 ml-auto" />
+              </button>
+              <AnimatePresence>
+                {showPriorityMenu && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    className="absolute top-full left-0 mt-2 z-20 bg-[var(--surface-2)] border border-[var(--border-strong)] rounded-xl shadow-2xl shadow-black/40 overflow-hidden min-w-40 p-1"
+                  >
+                    {(Object.keys(PRIORITY_CONFIG) as Priority[]).map(p => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => { setPriority(p); setShowPriorityMenu(false); }}
+                        className={`w-full text-left px-2.5 py-2 rounded-lg text-xs flex items-center gap-2 hover:bg-white/[0.06] transition-colors ${PRIORITY_CONFIG[p].color} ${priority === p ? 'bg-white/[0.05]' : ''}`}
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full bg-current" /> {PRIORITY_CONFIG[p].label}
+                      </button>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
 
-            <div className="shrink-0">
+            {/* Due date */}
+            <div ref={dueMenuRef} className="flex-1 relative">
               <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-dim)] mb-2 flex items-center gap-1.5">
                 <CalendarDays className="w-3.5 h-3.5" /> Due date
               </label>
-              <div className="flex items-center gap-1.5">
-                <input
-                  type="date"
-                  value={dueDate}
-                  onChange={e => { setDueDate(e.target.value); if (e.target.value) e.target.blur(); }}
-                  className="text-xs bg-white/[0.04] border border-[var(--border)] rounded-xl px-3 py-2.5 text-[var(--text)] outline-none focus:border-blue-500/40 focus:bg-white/[0.06] focus:ring-4 focus:ring-blue-500/10 transition-all"
-                />
-                {dueDate && (
-                  <button
-                    type="button"
-                    onClick={() => setDueDate('')}
-                    title="Remove due date"
-                    className="shrink-0 text-[var(--text-dim)] hover:text-red-400 p-1 rounded-md hover:bg-white/[0.06] transition-colors"
+              <button
+                type="button"
+                onClick={() => { setShowDueMenu(v => !v); setShowPriorityMenu(false); setShowRepeatMenu(false); }}
+                className={`w-full text-xs flex items-center gap-1.5 px-3 py-2.5 rounded-xl border border-[var(--border)] hover:bg-white/[0.06] bg-white/[0.04] transition-colors ${dueDate ? 'text-[var(--text)]' : 'text-[var(--text-dim)]'}`}
+              >
+                <CalendarDays className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">{dueDate ? new Date(inputValueToDueDate(dueDate)!).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }) : 'Pick a date'}</span>
+                <ChevronDown className="w-3 h-3 text-slate-500 ml-auto shrink-0" />
+              </button>
+              <AnimatePresence>
+                {showDueMenu && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    className="absolute top-full right-0 mt-2 z-20 bg-[var(--surface-2)] border border-[var(--border-strong)] rounded-xl shadow-2xl shadow-black/40 min-w-56 p-2 flex flex-col gap-1.5"
                   >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
+                    <div className="grid grid-cols-2 gap-1">
+                      {dueDatePresets().map(p => {
+                        const val = dueDateToInputValue(p.ts);
+                        return (
+                          <button
+                            key={p.label}
+                            type="button"
+                            onClick={() => { setDueDate(val); setShowDueMenu(false); }}
+                            className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors text-center ${dueDate === val ? 'border-blue-500/50 bg-blue-500/15 text-[var(--text)]' : 'border-[var(--border)] bg-white/[0.04] hover:bg-white/[0.08] hover:border-blue-500/40 text-[var(--text)]'}`}
+                          >
+                            {p.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="flex items-center gap-2 px-0.5">
+                      <span className="h-px flex-1 bg-[var(--border)]" />
+                      <span className="text-[10px] uppercase tracking-wide text-[var(--text-dim)]">or pick a date</span>
+                      <span className="h-px flex-1 bg-[var(--border)]" />
+                    </div>
+                    <input
+                      type="date"
+                      value={dueDate}
+                      onChange={e => { setDueDate(e.target.value); if (e.target.value) e.target.blur(); }}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); setShowDueMenu(false); } }}
+                      className="text-xs bg-white/[0.04] border border-[var(--border)] rounded-lg px-2.5 py-2 text-[var(--text)] outline-none focus:border-blue-500/40 transition-colors"
+                    />
+                    <div className="flex items-center gap-1 pt-0.5">
+                      {dueDate && (
+                        <button
+                          type="button"
+                          onClick={() => { setDueDate(''); setShowDueMenu(false); }}
+                          className="px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1.5 hover:bg-white/[0.06] transition-colors text-[var(--text-dim)] hover:text-red-400"
+                        >
+                          <X className="w-3.5 h-3.5" /> Remove
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setShowDueMenu(false)}
+                        className="ml-auto px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 bg-blue-500/15 border border-blue-500/40 text-blue-300 hover:bg-blue-500/25 transition-colors"
+                      >
+                        <Check className="w-3.5 h-3.5" /> Done
+                      </button>
+                    </div>
+                  </motion.div>
                 )}
-              </div>
-              <div className="flex flex-wrap gap-1 mt-1.5">
-                {dueDatePresets().map(p => {
-                  const val = dueDateToInputValue(p.ts);
-                  return (
-                    <button
-                      key={p.label}
-                      type="button"
-                      onClick={() => setDueDate(val)}
-                      className={`text-[11px] px-2 py-1 rounded-md border transition-colors ${dueDate === val ? 'border-blue-500/50 bg-blue-500/15 text-[var(--text)]' : 'border-[var(--border)] bg-white/[0.03] hover:bg-white/[0.07] hover:border-blue-500/40 text-[var(--text-dim)] hover:text-[var(--text)]'}`}
-                    >
-                      {p.label}
-                    </button>
-                  );
-                })}
-              </div>
+              </AnimatePresence>
+            </div>
 
-              <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-dim)] mt-3 mb-2 flex items-center gap-1.5">
+            {/* Repeat */}
+            <div ref={repeatMenuRef} className="flex-1 relative">
+              <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-dim)] mb-2 flex items-center gap-1.5">
                 <Repeat className="w-3.5 h-3.5" /> Repeat
               </label>
-              <select
-                value={repeat}
-                onChange={e => setRepeat(e.target.value as RecurrenceFreq | 'none')}
-                className="text-xs bg-white/[0.04] border border-[var(--border)] rounded-xl px-3 py-2.5 text-[var(--text)] outline-none focus:border-blue-500/40 focus:bg-white/[0.06] focus:ring-4 focus:ring-blue-500/10 transition-all w-full"
+              <button
+                type="button"
+                onClick={() => { setShowRepeatMenu(v => !v); setShowPriorityMenu(false); setShowDueMenu(false); }}
+                className={`w-full text-xs flex items-center gap-1.5 px-3 py-2.5 rounded-xl border border-[var(--border)] hover:bg-white/[0.06] bg-white/[0.04] transition-colors ${repeat !== 'none' ? 'text-[var(--text)]' : 'text-[var(--text-dim)]'}`}
               >
-                {RECURRENCE_OPTIONS.map(o => (
-                  <option key={o.value} value={o.value} className="bg-[var(--surface-2)]">{o.label}</option>
-                ))}
-              </select>
-              {repeat !== 'none' && !dueDate && (
-                <p className="text-[11px] text-[var(--text-dim)] mt-1.5">Starts today — next one auto-created when done.</p>
-              )}
+                <Repeat className={`w-3.5 h-3.5 shrink-0 ${repeat !== 'none' ? 'text-blue-400' : ''}`} />
+                <span className="truncate">{RECURRENCE_OPTIONS.find(o => o.value === repeat)?.label}</span>
+                <ChevronDown className="w-3 h-3 text-slate-500 ml-auto shrink-0" />
+              </button>
+              <AnimatePresence>
+                {showRepeatMenu && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    className="absolute top-full right-0 mt-2 z-20 bg-[var(--surface-2)] border border-[var(--border-strong)] rounded-xl shadow-2xl shadow-black/40 overflow-hidden min-w-44 p-1"
+                  >
+                    {RECURRENCE_OPTIONS.map(o => (
+                      <button
+                        key={o.value}
+                        type="button"
+                        onClick={() => { setRepeat(o.value); setShowRepeatMenu(false); }}
+                        className={`w-full text-left px-2.5 py-2 rounded-lg text-xs hover:bg-white/[0.06] transition-colors ${repeat === o.value ? 'text-blue-300 bg-blue-500/10' : 'text-[var(--text)]'}`}
+                      >
+                        {o.label}
+                      </button>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           </div>
+
+          {/* Repeat anchors on the due date — show the resulting first/next run. */}
+          {repeat !== 'none' && (() => {
+            const rec = parseRecurrence(makeRecurrence(repeat));
+            const anchor = inputValueToDueDate(dueDate) ?? startOfToday();
+            const next = rec ? nextDueDateAfter(anchor, rec, startOfToday()) : anchor;
+            return (
+              <p className="text-[11px] text-[var(--text-dim)] -mt-1 flex items-center gap-1.5">
+                <CalendarDays className="w-3 h-3" />
+                {dueDate ? `Starts ${new Date(anchor).toLocaleDateString('de-DE')}` : 'Starts today'} · next on {new Date(next).toLocaleDateString('de-DE')} when done
+              </p>
+            );
+          })()}
 
           {/* Labels */}
           <div>

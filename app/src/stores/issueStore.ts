@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { invoke } from '@tauri-apps/api/core';
 import type { Issue, Comment, Label, Attachment, Priority, Status } from '../lib/types';
-import { formatBytes, isOverdue, parseRecurrence, nextDueDate } from '../lib/types';
+import { formatBytes, isOverdue, parseRecurrence, nextDueDateAfter, startOfToday } from '../lib/types';
 import * as db from '../lib/db';
 
 // Hard cap on attachment size — bytes go to disk, but an unbounded file would
@@ -143,7 +143,7 @@ export const useIssueStore = create<IssueStore>((set, get) => {
         labelIds: (issue.labels ?? []).map(l => l.id),
         source: issue.source,
         sourceMeta: issue.source_meta ? JSON.parse(issue.source_meta) : null,
-        dueDate: nextDueDate(issue.due_date, rec),
+        dueDate: nextDueDateAfter(issue.due_date, rec, startOfToday()),
         recurrence: issue.recurrence,
       });
       // Strip the rule from the completed task so re-toggling can't spawn again.

@@ -141,7 +141,7 @@ function addMonthsClamped(ts: number, months: number): number {
   return d.getTime();
 }
 
-/** Next due date for a fixed (due-anchored) recurrence. */
+/** Next due date for a fixed (due-anchored) recurrence (advances exactly once). */
 export function nextDueDate(from: number, rec: Recurrence): number {
   const n = rec.interval;
   switch (rec.freq) {
@@ -150,6 +150,15 @@ export function nextDueDate(from: number, rec: Recurrence): number {
     case 'monthly': return addMonthsClamped(from, n);
     case 'yearly':  return addMonthsClamped(from, 12 * n);
   }
+}
+
+/** Next occurrence at or after `floor`, advancing at least once. Catches up
+ *  skipped cycles so completing a task late doesn't spawn an already-overdue
+ *  one (e.g. a weekly task ticked 3 weeks late lands on the next future week). */
+export function nextDueDateAfter(from: number, rec: Recurrence, floor: number): number {
+  let next = nextDueDate(from, rec);
+  while (next < floor) next = nextDueDate(next, rec);
+  return next;
 }
 
 export const RECURRENCE_OPTIONS: { value: RecurrenceFreq | 'none'; label: string }[] = [

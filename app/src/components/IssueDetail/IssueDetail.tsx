@@ -2,7 +2,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useState, useRef, useEffect } from 'react';
 import { Trash2, CircleDot, Clock, CircleCheck, XCircle, ChevronDown, Paperclip, FileText, Download, ExternalLink, Mail, Plus, Check, X, Tag, CalendarDays, Repeat } from 'lucide-react';
 import type { Status, Priority, RecurrenceFreq } from '../../lib/types';
-import { PRIORITY_CONFIG, STATUS_CONFIG, formatBytes, isOverdue, dueDateToInputValue, inputValueToDueDate, dueDatePresets, makeRecurrence, recurrenceFreq, recurrenceLabel, RECURRENCE_OPTIONS, startOfToday, clipboardImages } from '../../lib/types';
+import { PRIORITY_CONFIG, STATUS_CONFIG, formatBytes, isOverdue, dueDateToInputValue, inputValueToDueDate, dueDatePresets, makeRecurrence, recurrenceFreq, recurrenceLabel, parseRecurrence, nextDueDateAfter, RECURRENCE_OPTIONS, startOfToday, clipboardImages } from '../../lib/types';
 import { readEmailMeta } from '../../lib/emailParse';
 import { useIssueStore } from '../../stores/issueStore';
 import { CommentBox } from '../CommentBox/CommentBox';
@@ -361,6 +361,16 @@ export function IssueDetail() {
                             </button>
                           );
                         })}
+                        {(() => {
+                          const rec = parseRecurrence(issue.recurrence);
+                          if (!rec) return null;
+                          const next = nextDueDateAfter(issue.due_date ?? startOfToday(), rec, startOfToday());
+                          return (
+                            <div className="mt-1 mx-1 px-1.5 pt-2 border-t border-[var(--border)] text-[11px] text-[var(--text-dim)] flex items-center gap-1.5">
+                              <CalendarDays className="w-3 h-3" /> Next: {new Date(next).toLocaleDateString('de-DE')}
+                            </div>
+                          );
+                        })()}
                       </motion.div>
                     )}
                   </AnimatePresence>

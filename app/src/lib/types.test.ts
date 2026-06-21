@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatBytes, parseRecurrence, makeRecurrence, recurrenceFreq, nextDueDate } from './types';
+import { formatBytes, parseRecurrence, makeRecurrence, recurrenceFreq, nextDueDate, nextDueDateAfter } from './types';
 
 describe('formatBytes', () => {
   it('handles null/zero', () => {
@@ -53,5 +53,23 @@ describe('nextDueDate (local, due-anchored)', () => {
   });
   it('handles a leap-year Feb 29 anchor on yearly', () => {
     expect(nextDueDate(at(2024, 2, 29), { freq: 'yearly', interval: 1 })).toBe(at(2025, 2, 28));
+  });
+});
+
+describe('nextDueDateAfter (catch-up for late completion)', () => {
+  const at = (y: number, m: number, d: number) => new Date(y, m - 1, d).getTime();
+
+  it('advances once when already in the future', () => {
+    const floor = at(2026, 6, 21);
+    expect(nextDueDateAfter(at(2026, 6, 20), { freq: 'weekly', interval: 1 }, floor)).toBe(at(2026, 6, 27));
+  });
+  it('skips missed cycles so the result is never before the floor', () => {
+    const floor = at(2026, 6, 21);
+    // weekly due 3+ weeks ago → first future week, not a past date
+    expect(nextDueDateAfter(at(2026, 5, 25), { freq: 'weekly', interval: 1 }, floor)).toBe(at(2026, 6, 22));
+  });
+  it('lands exactly on the floor when a cycle falls on it', () => {
+    const floor = at(2026, 6, 21);
+    expect(nextDueDateAfter(at(2026, 6, 14), { freq: 'weekly', interval: 1 }, floor)).toBe(at(2026, 6, 21));
   });
 });
