@@ -15,6 +15,7 @@ export interface Issue {
   source_meta: string | null;  // JSON: { fromName, fromEmail, to, date, subject }
   due_date: number | null;     // local midnight of the due day (ms)
   recurrence: string | null;   // JSON Recurrence (e.g. {"freq":"weekly","interval":1}) or null
+  folder_id: string | null;    // optional folder (null = none)
   labels?: Label[];
   comment_count?: number;
 }
@@ -35,6 +36,12 @@ export interface Attachment {
   rel_path: string | null; // path under appDataDir/attachments
   size_bytes: number | null;
   checksum: string | null; // sha-256 hex of the bytes (null on pre-existing rows)
+  created_at: number;
+}
+
+export interface Folder {
+  id: string;
+  name: string;
   created_at: number;
 }
 

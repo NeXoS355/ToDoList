@@ -26,6 +26,9 @@ export function QuickComposer({ onAddDetails }: { onAddDetails: (title: string) 
   const createIssue = useIssueStore(s => s.createIssue);
   const selectIssue = useIssueStore(s => s.selectIssue);
   const labels = useIssueStore(s => s.labels);
+  // New tasks land in the folder in view — say so in the placeholder.
+  const folderName = useIssueStore(s =>
+    s.filter.folderId === 'all' ? null : s.folders.find(f => f.id === s.filter.folderId)?.name ?? null);
   const [value, setValue] = useState('');
   const [flash, setFlash] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -74,7 +77,7 @@ export function QuickComposer({ onAddDetails }: { onAddDetails: (title: string) 
         ref={inputRef}
         type="text"
         autoFocus
-        placeholder="Add a task…"
+        placeholder={folderName ? `Add a task to ${folderName}…` : 'Add a task…'}
         title={'Inline tokens: !high or !! = priority · #label · @tomorrow, @fri, @24.12. = due date'}
         value={value}
         onChange={e => setValue(e.target.value)}

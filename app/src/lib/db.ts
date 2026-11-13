@@ -1,7 +1,7 @@
 import Database from '@tauri-apps/plugin-sql';
 import { appDataDir, join } from '@tauri-apps/api/path';
 import schema from './schema.sql?raw';
-import type { Issue, Comment, Label, Attachment } from './types';
+import type { Issue, Comment, Label, Attachment, Folder } from './types';
 
 let db: Awaited<ReturnType<typeof Database.load>> | null = null;
 
@@ -21,6 +21,7 @@ async function getDb() {
     await conn.execute('ALTER TABLE issues ADD COLUMN due_date INTEGER').catch(() => {});
     await conn.execute('ALTER TABLE issues ADD COLUMN recurrence TEXT').catch(() => {});
     await conn.execute('ALTER TABLE attachments ADD COLUMN checksum TEXT').catch(() => {});
+    await conn.execute('ALTER TABLE issues ADD COLUMN folder_id TEXT').catch(() => {});
     db = conn;
   }
   return db;
@@ -80,14 +81,15 @@ export async function createIssue(data: {
   sourceMeta?: Record<string, unknown> | null;
   dueDate?: number | null;
   recurrence?: string | null;
+  folderId?: string | null;
 }): Promise<Issue> {
   const db = await getDb();
   const id = uuid();
   const now = Date.now();
   const sourceMeta = data.sourceMeta ? JSON.stringify(data.sourceMeta) : null;
   await db.execute(
-    'INSERT INTO issues (id, title, body, priority, status, created_at, updated_at, source, source_meta, due_date, recurrence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, data.title, data.body, data.priority, 'open', now, now, data.source ?? null, sourceMeta, data.dueDate ?? null, data.recurrence ?? null]
+    'INSERT INTO issues (id, title, body, priority, status, created_at, updated_at, source, source_meta, due_date, recurrence, folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [id, data.title, data.body, data.priority, 'open', now, now, data.source ?? null, sourceMeta, data.dueDate ?? null, data.recurrence ?? null, data.folderId ?? null]
   );
   if (data.labelIds?.length) {
     for (const lid of data.labelIds) {
@@ -97,9 +99,9 @@ export async function createIssue(data: {
   return (await getIssue(id))!;
 }
 
-const UPDATABLE_COLUMNS = ['title', 'body', 'priority', 'status', 'due_date', 'recurrence'] as const;
+const UPDATABLE_COLUMNS = ['title', 'body', 'priority', 'status', 'due_date', 'recurrence', 'folder_id'] as const;
 
-export async function updateIssue(id: string, data: Partial<Pick<Issue, 'title' | 'body' | 'priority' | 'status' | 'due_date' | 'recurrence'>>): Promise<void> {
+export async function updateIssue(id: string, data: Partial<Pick<Issue, typeof UPDATABLE_COLUMNS[number]>>): Promise<void> {
   const db = await getDb();
   // Whitelist column names so they can never become an injection vector, even
   // if a caller passes unexpected keys (values stay parameterized regardless).
@@ -233,4 +235,31 @@ export async function setIssueLabels(issueId: string, labelIds: string[]): Promi
   for (const lid of labelIds) {
     await db.execute('INSERT INTO issue_labels (issue_id, label_id) VALUES (?, ?)', [issueId, lid]);
   }
+}
+
+// --- Folders ---------------------------------------------------------------
+
+export async function getFolders(): Promise<Folder[]> {
+  const db = await getDb();
+  return db.select<Folder[]>('SELECT * FROM folders ORDER BY name COLLATE NOCASE');
+}
+
+export async function createFolder(name: string): Promise<Folder> {
+  const db = await getDb();
+  const folder = { id: uuid(), name, created_at: Date.now() };
+  // `name` is UNIQUE (case-insensitive) — a duplicate throws, surfaced as a toast.
+  await db.execute('INSERT INTO folders (id, name, created_at) VALUES (?, ?, ?)', [folder.id, folder.name, folder.created_at]);
+  return folder;
+}
+
+export async function renameFolder(id: string, name: string): Promise<void> {
+  const db = await getDb();
+  await db.execute('UPDATE folders SET name = ? WHERE id = ?', [name, id]);
+}
+
+/** Delete a folder; its issues stay and simply lose the folder. */
+export async function deleteFolder(id: string): Promise<void> {
+  const db = await getDb();
+  await db.execute('UPDATE issues SET folder_id = NULL WHERE folder_id = ?', [id]);
+  await db.execute('DELETE FROM folders WHERE id = ?', [id]);
 }

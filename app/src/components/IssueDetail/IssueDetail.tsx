@@ -1,6 +1,6 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { useState, useRef, useEffect } from 'react';
-import { Trash2, CircleDot, Clock, CircleCheck, XCircle, ChevronDown, Paperclip, FileText, Download, ExternalLink, Mail, Plus, Check, X, Tag, CalendarDays, Repeat } from 'lucide-react';
+import { Trash2, CircleDot, Clock, CircleCheck, XCircle, ChevronDown, Paperclip, FileText, Download, ExternalLink, Mail, Plus, Check, X, Tag, CalendarDays, Repeat, Folder as FolderIcon } from 'lucide-react';
 import type { Status, Priority, RecurrenceFreq } from '../../lib/types';
 import { PRIORITY_CONFIG, STATUS_CONFIG, formatBytes, isOverdue, dueDateToInputValue, inputValueToDueDate, dueDatePresets, makeRecurrence, recurrenceFreq, recurrenceLabel, parseRecurrence, nextDueDateAfter, RECURRENCE_OPTIONS, startOfToday, clipboardImages } from '../../lib/types';
 import { readEmailMeta } from '../../lib/emailParse';
@@ -21,7 +21,7 @@ const STATUS_ICONS: Record<Status, React.ReactNode> = {
 };
 
 export function IssueDetail() {
-  const { issues, selectedId, updateIssue, deleteIssue, attachments, downloadAttachment, openAttachment, labels, setIssueLabels, createLabel, addAttachment } = useIssueStore();
+  const { issues, selectedId, updateIssue, deleteIssue, attachments, downloadAttachment, openAttachment, labels, setIssueLabels, createLabel, addAttachment, folders, createFolder } = useIssueStore();
   const issue = issues.find(i => i.id === selectedId) ?? null;
   // Issue-level files only; comment attachments render inside their comment.
   const issueAttachments = attachments.filter(a => a.comment_id == null);
@@ -30,6 +30,8 @@ export function IssueDetail() {
   const [showLabelMenu, setShowLabelMenu] = useState(false);
   const [showDueMenu, setShowDueMenu] = useState(false);
   const [showRepeatMenu, setShowRepeatMenu] = useState(false);
+  const [showFolderMenu, setShowFolderMenu] = useState(false);
+  const [newFolder, setNewFolder] = useState('');
   const [newLabel, setNewLabel] = useState('');
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const statusMenuRef = useRef<HTMLDivElement>(null);
@@ -37,10 +39,11 @@ export function IssueDetail() {
   const labelMenuRef = useRef<HTMLDivElement>(null);
   const dueMenuRef = useRef<HTMLDivElement>(null);
   const repeatMenuRef = useRef<HTMLDivElement>(null);
+  const folderMenuRef = useRef<HTMLDivElement>(null);
 
   // Close any open picker when clicking outside its container.
   useEffect(() => {
-    if (!showStatusMenu && !showPriorityMenu && !showLabelMenu && !showDueMenu && !showRepeatMenu) return;
+    if (!showStatusMenu && !showPriorityMenu && !showLabelMenu && !showDueMenu && !showRepeatMenu && !showFolderMenu) return;
     const onDown = (e: MouseEvent) => {
       const t = e.target as Node;
       if (statusMenuRef.current && !statusMenuRef.current.contains(t)) setShowStatusMenu(false);
@@ -48,10 +51,11 @@ export function IssueDetail() {
       if (labelMenuRef.current && !labelMenuRef.current.contains(t)) setShowLabelMenu(false);
       if (dueMenuRef.current && !dueMenuRef.current.contains(t)) setShowDueMenu(false);
       if (repeatMenuRef.current && !repeatMenuRef.current.contains(t)) setShowRepeatMenu(false);
+      if (folderMenuRef.current && !folderMenuRef.current.contains(t)) setShowFolderMenu(false);
     };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
-  }, [showStatusMenu, showPriorityMenu, showLabelMenu, showDueMenu, showRepeatMenu]);
+  }, [showStatusMenu, showPriorityMenu, showLabelMenu, showDueMenu, showRepeatMenu, showFolderMenu]);
 
   // Inline title/body editing — click either to edit, commit on blur/Enter.
   const [editingTitle, setEditingTitle] = useState(false);
@@ -68,7 +72,9 @@ export function IssueDetail() {
     setShowLabelMenu(false);
     setShowDueMenu(false);
     setShowRepeatMenu(false);
+    setShowFolderMenu(false);
     setNewLabel('');
+    setNewFolder('');
   }, [selectedId]);
 
   const startTitleEdit = () => { if (issue) { setTitleDraft(issue.title); setEditingTitle(true); } };
@@ -155,6 +161,20 @@ export function IssueDetail() {
   };
 
   // Create a label inline and attach it to the current issue.
+  const moveToFolder = async (folderId: string | null) => {
+    if (!issue) return;
+    setShowFolderMenu(false);
+    if (folderId !== issue.folder_id) await updateIssue(issue.id, { folder_id: folderId });
+  };
+
+  const handleCreateFolder = async () => {
+    if (!newFolder.trim()) return;
+    const folder = await createFolder(newFolder);
+    if (!folder) return;
+    setNewFolder('');
+    await moveToFolder(folder.id);
+  };
+
   const handleCreateLabel = async () => {
     if (!issue) return;
     const name = newLabel.trim();
@@ -375,6 +395,75 @@ export function IssueDetail() {
                     )}
                   </AnimatePresence>
                 </div>
+
+                {/* Folder — only once folders are in use (they're optional). */}
+                {(folders.length > 0 || issue.folder_id) && (() => {
+                  const current = folders.find(f => f.id === issue.folder_id);
+                  return (
+                    <div ref={folderMenuRef} className="relative">
+                      <button
+                        onClick={() => { setShowFolderMenu(v => !v); setShowStatusMenu(false); setShowPriorityMenu(false); setShowLabelMenu(false); setShowDueMenu(false); setShowRepeatMenu(false); }}
+                        title="Move to folder"
+                        className={`text-xs flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[var(--border-strong)] hover:bg-white/[0.06] bg-white/[0.03] transition-colors ${current ? 'text-[var(--text)]' : 'text-[var(--text-dim)]'}`}
+                      >
+                        <FolderIcon className={`w-3.5 h-3.5 ${current ? 'text-blue-400' : ''}`} />
+                        <span className="max-w-32 truncate">{current?.name ?? 'Folder'}</span>
+                        <ChevronDown className="w-3 h-3 text-slate-500" />
+                      </button>
+                      <AnimatePresence>
+                        {showFolderMenu && (
+                          <motion.div
+                            initial={{ opacity: 0, y: -4 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -4 }}
+                            className="absolute top-full left-0 mt-2 z-20 bg-[var(--surface-2)] border border-[var(--border-strong)] rounded-xl shadow-2xl shadow-black/40 overflow-hidden min-w-48 p-1"
+                          >
+                            <div className="max-h-56 overflow-y-auto">
+                              <button
+                                onClick={() => moveToFolder(null)}
+                                className="w-full text-left px-2.5 py-2 rounded-lg text-xs flex items-center gap-2 hover:bg-white/[0.06] transition-colors text-[var(--text-dim)]"
+                              >
+                                <span className="flex-1">No folder</span>
+                                {!current && <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
+                              </button>
+                              {folders.map(f => (
+                                <button
+                                  key={f.id}
+                                  onClick={() => moveToFolder(f.id)}
+                                  className="w-full text-left px-2.5 py-2 rounded-lg text-xs flex items-center gap-2 hover:bg-white/[0.06] transition-colors text-[var(--text)]"
+                                >
+                                  <FolderIcon className="w-3.5 h-3.5 shrink-0 text-[var(--text-dim)]" />
+                                  <span className="flex-1 truncate">{f.name}</span>
+                                  {current?.id === f.id && <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
+                                </button>
+                              ))}
+                            </div>
+                            {/* Inline create */}
+                            <div className="flex items-center gap-1 mt-1 pt-1 border-t border-[var(--border)] px-1">
+                              <input
+                                type="text"
+                                value={newFolder}
+                                onChange={e => setNewFolder(e.target.value)}
+                                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleCreateFolder(); } }}
+                                placeholder="New folder"
+                                className="flex-1 min-w-0 text-xs bg-transparent text-[var(--text)] placeholder:text-[var(--text-dim)] outline-none px-1.5 py-1"
+                              />
+                              <button
+                                type="button"
+                                onClick={handleCreateFolder}
+                                disabled={!newFolder.trim()}
+                                title="Create folder and move task"
+                                className="shrink-0 text-[var(--text-dim)] hover:text-emerald-400 disabled:opacity-30 disabled:hover:text-[var(--text-dim)] transition-colors p-1"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  );
+                })()}
 
                 <span className="text-xs text-[var(--text-dim)] ml-0.5">opened {formatDate(issue.created_at)}</span>
               </div>

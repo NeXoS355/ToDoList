@@ -13,7 +13,16 @@ CREATE TABLE IF NOT EXISTS issues (
   source      TEXT,
   source_meta TEXT,
   due_date    INTEGER,
-  recurrence  TEXT
+  recurrence  TEXT,
+  folder_id   TEXT
+);
+
+-- Optional grouping: an issue sits in at most one folder (folder_id NULL =
+-- no folder). Deleting a folder unfiles its issues (done in db.deleteFolder).
+CREATE TABLE IF NOT EXISTS folders (
+  id          TEXT PRIMARY KEY,
+  name        TEXT UNIQUE NOT NULL COLLATE NOCASE,
+  created_at  INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS comments (

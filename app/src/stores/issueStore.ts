@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { invoke } from '@tauri-apps/api/core';
-import type { Issue, Comment, Label, Attachment, Priority, Status } from '../lib/types';
+import type { Issue, Comment, Label, Attachment, Priority, Status, Folder } from '../lib/types';
 import { formatBytes, isOverdue, parseRecurrence, nextDueDateAfter, startOfToday } from '../lib/types';
 import * as db from '../lib/db';
 
@@ -48,11 +48,14 @@ interface IssueStore {
   comments: Comment[];
   attachments: Attachment[];
   labels: Label[];
+  folders: Folder[];
   loading: boolean;
   error: string | null;
   // One-shot success/info message (green toast), e.g. "file attached".
   notice: string | null;
-  filter: { status: Status | 'all'; priority: Priority | 'all'; labelId: string | 'all'; search: string };
+  // folderId: 'all' shows every issue; a folder id narrows the list to that
+  // folder (and new issues are filed into it).
+  filter: { status: Status | 'all'; priority: Priority | 'all'; labelId: string | 'all'; folderId: string | 'all'; search: string };
   // Issues removed from the list but not yet deleted in the DB — restorable
   // until the undo window closes (single delete or a whole "clear done" batch).
   pendingUndo: { issues: Issue[] } | null;
@@ -61,14 +64,18 @@ interface IssueStore {
   clearNotice: () => void;
   loadIssues: () => Promise<void>;
   loadLabels: () => Promise<void>;
+  loadFolders: () => Promise<void>;
   selectIssue: (id: string | null) => Promise<void>;
-  createIssue: (data: { title: string; body: string; priority: Priority; labelIds?: string[]; source?: string | null; sourceMeta?: Record<string, unknown> | null; dueDate?: number | null; recurrence?: string | null }) => Promise<string | null>;
-  updateIssue: (id: string, data: Partial<Pick<Issue, 'title' | 'body' | 'priority' | 'status' | 'due_date' | 'recurrence'>>) => Promise<void>;
+  createIssue: (data: { title: string; body: string; priority: Priority; labelIds?: string[]; source?: string | null; sourceMeta?: Record<string, unknown> | null; dueDate?: number | null; recurrence?: string | null; folderId?: string | null }) => Promise<string | null>;
+  updateIssue: (id: string, data: Partial<Pick<Issue, 'title' | 'body' | 'priority' | 'status' | 'due_date' | 'recurrence' | 'folder_id'>>) => Promise<void>;
   deleteIssue: (id: string) => Promise<void>;
   clearDone: () => Promise<void>;
   undoDelete: () => void;
   setIssueLabels: (issueId: string, labelIds: string[]) => Promise<void>;
   createLabel: (name: string) => Promise<Label | null>;
+  createFolder: (name: string) => Promise<Folder | null>;
+  renameFolder: (id: string, name: string) => Promise<void>;
+  deleteFolder: (id: string) => Promise<void>;
   addComment: (issueId: string, body: string, files?: File[]) => Promise<void>;
   deleteComment: (id: string) => Promise<void>;
   /** Resolves to the new attachment's id (for attachment:// links), or null if rejected. */
@@ -145,6 +152,7 @@ export const useIssueStore = create<IssueStore>((set, get) => {
         sourceMeta: issue.source_meta ? JSON.parse(issue.source_meta) : null,
         dueDate: nextDueDateAfter(issue.due_date, rec, startOfToday()),
         recurrence: issue.recurrence,
+        folderId: issue.folder_id,
       });
       // Strip the rule from the completed task so re-toggling can't spawn again.
       await db.updateIssue(issue.id, { recurrence: null });
@@ -202,10 +210,11 @@ export const useIssueStore = create<IssueStore>((set, get) => {
     comments: [],
     attachments: [],
     labels: [],
+    folders: [],
     loading: false,
     error: null,
     notice: null,
-    filter: { status: 'open', priority: 'all', labelId: 'all', search: '' },
+    filter: { status: 'open', priority: 'all', labelId: 'all', folderId: 'all', search: '' },
     pendingUndo: null,
 
     clearError: () => set({ error: null }),
@@ -219,6 +228,14 @@ export const useIssueStore = create<IssueStore>((set, get) => {
       } catch (e) {
         fail(e);
         set({ loading: false });
+      }
+    },
+
+    loadFolders: async () => {
+      try {
+        set({ folders: await db.getFolders() });
+      } catch (e) {
+        fail(e);
       }
     },
 
@@ -246,7 +263,12 @@ export const useIssueStore = create<IssueStore>((set, get) => {
 
     createIssue: async (data) => {
       try {
-        const issue = await db.createIssue(data);
+        // Unless the caller decides, file new issues into the folder in view.
+        const { folderId } = get().filter;
+        const issue = await db.createIssue({
+          ...data,
+          folderId: data.folderId !== undefined ? data.folderId : (folderId === 'all' ? null : folderId),
+        });
         set(s => ({ issues: sortIssues([issue, ...s.issues]) }));
         return issue.id;
       } catch (e) {
@@ -324,6 +346,57 @@ export const useIssueStore = create<IssueStore>((set, get) => {
       } catch (e) {
         fail(e);
         return null;
+      }
+    },
+
+    createFolder: async (name) => {
+      const trimmed = name.trim();
+      if (!trimmed) return null;
+      if (get().folders.some(f => f.name.toLowerCase() === trimmed.toLowerCase())) {
+        set({ error: `A folder named "${trimmed}" already exists.` });
+        return null;
+      }
+      try {
+        const folder = await db.createFolder(trimmed);
+        set(s => ({ folders: [...s.folders, folder].sort((a, b) => a.name.localeCompare(b.name)) }));
+        return folder;
+      } catch (e) {
+        fail(e);
+        return null;
+      }
+    },
+
+    renameFolder: async (id, name) => {
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      if (get().folders.some(f => f.id !== id && f.name.toLowerCase() === trimmed.toLowerCase())) {
+        set({ error: `A folder named "${trimmed}" already exists.` });
+        return;
+      }
+      try {
+        await db.renameFolder(id, trimmed);
+        set(s => ({ folders: s.folders.map(f => (f.id === id ? { ...f, name: trimmed } : f)).sort((a, b) => a.name.localeCompare(b.name)) }));
+      } catch (e) {
+        fail(e);
+      }
+    },
+
+    // Issues in the folder are kept — they just become unfiled.
+    deleteFolder: async (id) => {
+      const folder = get().folders.find(f => f.id === id);
+      try {
+        await db.deleteFolder(id);
+        const moved = get().issues.filter(i => i.folder_id === id).length;
+        set(s => ({
+          folders: s.folders.filter(f => f.id !== id),
+          issues: s.issues.map(i => (i.folder_id === id ? { ...i, folder_id: null } : i)),
+          filter: s.filter.folderId === id ? { ...s.filter, folderId: 'all' } : s.filter,
+          notice: folder
+            ? `Folder "${folder.name}" deleted${moved ? ` — its ${moved} task${moved === 1 ? '' : 's'} stay in All` : ''}.`
+            : null,
+        }));
+      } catch (e) {
+        fail(e);
       }
     },
 
@@ -433,6 +506,7 @@ export function useFilteredIssues() {
         }
         if (s.filter.priority !== 'all' && issue.priority !== s.filter.priority) return false;
         if (s.filter.labelId !== 'all' && !issue.labels?.some(l => l.id === s.filter.labelId)) return false;
+        if (s.filter.folderId !== 'all' && issue.folder_id !== s.filter.folderId) return false;
         if (s.filter.search) {
           const q = s.filter.search.toLowerCase();
           if (!issue.title.toLowerCase().includes(q) && !issue.body.toLowerCase().includes(q)) return false;

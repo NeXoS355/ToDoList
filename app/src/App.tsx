@@ -60,7 +60,7 @@ function resolveTheme(t: Theme): 'light' | 'dark' {
 }
 
 export default function App() {
-  const { loadIssues, loadLabels, issues, selectedId } = useIssueStore();
+  const { loadIssues, loadLabels, loadFolders, issues, selectedId } = useIssueStore();
   const [showNew, setShowNew] = useState(false);
   const [draft, setDraft] = useState<Draft>({ title: '', body: '', meta: null });
   const [dragging, setDragging] = useState(false);
@@ -106,6 +106,7 @@ export default function App() {
   useEffect(() => {
     loadIssues();
     loadLabels();
+    loadFolders();
   }, []);
 
   // Quick-add launch paths open the New Issue dialog for unmistakable feedback:

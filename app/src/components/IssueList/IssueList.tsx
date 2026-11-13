@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { CircleDot, CircleCheck, Clock, XCircle, MessageSquare, AlertCircle, ChevronRight, Search, CalendarDays, X, Trash2, Repeat } from 'lucide-react';
+import { CircleDot, CircleCheck, Clock, XCircle, MessageSquare, AlertCircle, ChevronRight, Search, CalendarDays, X, Trash2, Repeat, Folder as FolderIcon } from 'lucide-react';
 import type { Status, Issue } from '../../lib/types';
 import { PRIORITY_CONFIG, isOverdue, startOfToday, recurrenceLabel } from '../../lib/types';
 import { useIssueStore, useFilteredIssues } from '../../stores/issueStore';
+import { FolderBar, NewFolderButton } from '../FolderBar/FolderBar';
+import { beginTaskDrag, useTaskDrag } from '../../lib/taskDrag';
 
 const STATUS_ICONS: Record<Status, React.ReactNode> = {
   open:        <CircleDot className="w-4 h-4 text-green-400" />,
@@ -49,7 +51,24 @@ function dueClass(issue: Issue): string {
 }
 
 function IssueRow({ issue }: { issue: Issue }) {
-  const { selectedId, selectIssue, updateIssue } = useIssueStore();
+  const { selectedId, selectIssue, updateIssue, folders, filter } = useIssueStore();
+  const beingDragged = useTaskDrag(s => s.issueId === issue.id);
+  const wasDragged = useRef<() => boolean>(() => false);
+
+  // Drag the row onto a folder tab to file it (only meaningful once folders exist).
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (folders.length === 0 || (e.target as HTMLElement).closest('button')) return;
+    wasDragged.current = beginTaskDrag(e, issue, folderId => {
+      if (folderId === issue.folder_id) return;
+      updateIssue(issue.id, { folder_id: folderId });
+      const name = folders.find(f => f.id === folderId)?.name;
+      useIssueStore.setState({ notice: name ? `Moved to "${name}".` : 'Removed from folder.' });
+    });
+  };
+  // Folder name only when looking at everything — inside a folder it's implied.
+  const folderName = filter.folderId === 'all' && issue.folder_id
+    ? folders.find(f => f.id === issue.folder_id)?.name
+    : undefined;
   const selected = selectedId === issue.id;
   const pc = PRIORITY_CONFIG[issue.priority];
 
@@ -82,8 +101,9 @@ function IssueRow({ issue }: { issue: Issue }) {
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, x: -20 }}
       transition={{ duration: 0.12 }}
-      onClick={() => selectIssue(selected ? null : issue.id)}
-      className={`w-full text-left px-5 py-4 flex gap-2 items-start border-b border-[var(--border)] transition-colors cursor-pointer group relative
+      onPointerDown={onPointerDown}
+      onClick={() => { if (!wasDragged.current()) selectIssue(selected ? null : issue.id); }}
+      className={`${beingDragged ? 'opacity-40' : ''} w-full text-left px-5 py-4 flex gap-2 items-start border-b border-[var(--border)] transition-colors cursor-pointer group relative
         ${selected ? 'bg-[var(--accent-soft)]' : 'hover:bg-white/[0.035]'}`}
     >
       {selected && <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-blue-500/80" />}
@@ -143,6 +163,11 @@ function IssueRow({ issue }: { issue: Issue }) {
               {l.name}
             </span>
           ))}
+          {folderName && (
+            <span className="text-[11px] flex items-center gap-1 text-[var(--text-dim)] max-w-32" title={`In folder "${folderName}"`}>
+              <FolderIcon className="w-3 h-3 shrink-0" /> <span className="truncate">{folderName}</span>
+            </span>
+          )}
           <span className="text-[11px] text-[var(--text-dim)]">{formatDate(issue.updated_at)}</span>
           {(issue.comment_count ?? 0) > 0 && (
             <span className="text-[11px] text-[var(--text-dim)] flex items-center gap-1">
@@ -157,8 +182,25 @@ function IssueRow({ issue }: { issue: Issue }) {
   );
 }
 
+/** The pill that follows the pointer while a task is dragged to a folder. */
+function TaskDragGhost() {
+  const { issueId, title, x, y, over } = useTaskDrag();
+  if (!issueId) return null;
+  return (
+    <div
+      className={`fixed z-[70] pointer-events-none max-w-64 truncate text-xs font-medium px-3 py-1.5 rounded-lg border shadow-2xl shadow-black/40 bg-[var(--surface-2)] transition-colors ${
+        over !== null ? 'border-blue-500/50 text-blue-300' : 'border-[var(--border-strong)] text-[var(--text-bright)]'
+      }`}
+      style={{ left: x + 12, top: y + 10 }}
+    >
+      {title}
+    </div>
+  );
+}
+
 export function IssueList() {
-  const { filter, setFilter, loading, labels, issues: allIssues, clearDone } = useIssueStore();
+  const { filter, setFilter, loading, labels, folders, issues: allIssues, clearDone } = useIssueStore();
+  const [creatingFolder, setCreatingFolder] = useState(false);
   // Already sorted by the store (see sortIssues); render as-is.
   const issues = useFilteredIssues();
   const searchRef = useRef<HTMLInputElement>(null);
@@ -188,6 +230,8 @@ export function IssueList() {
 
   return (
     <div className="flex flex-col h-full">
+      <FolderBar creating={creatingFolder} setCreating={setCreatingFolder} />
+
       {/* Search */}
       <div className="px-4 pt-4 pb-3">
         <div className="relative">
@@ -233,12 +277,19 @@ export function IssueList() {
             </button>
           ))}
 
+          <div className="ml-auto" />
+
+          {/* Folders are optional — until the first one exists, this is the only trace. */}
+          {folders.length === 0 && !creatingFolder && (
+            <NewFolderButton onClick={() => setCreatingFolder(true)} />
+          )}
+
           {/* Manual cleanup — deletes all done issues (undoable via toast). */}
           {doneCount > 0 && (
             <button
               onClick={() => clearDone()}
               title={`Delete ${doneCount} done issue${doneCount === 1 ? '' : 's'} (undoable)`}
-              className="ml-auto text-xs px-2.5 py-1.5 rounded-lg font-medium flex items-center gap-1.5 text-[var(--text-dim)] hover:text-red-400 hover:bg-red-500/10 transition-colors"
+              className="text-xs px-2.5 py-1.5 rounded-lg font-medium flex items-center gap-1.5 text-[var(--text-dim)] hover:text-red-400 hover:bg-red-500/10 transition-colors"
             >
               <Trash2 className="w-3 h-3" /> Clear done
             </button>
@@ -270,6 +321,8 @@ export function IssueList() {
         )}
       </div>
 
+      <TaskDragGhost />
+
       {/* List */}
       <div className="flex-1 overflow-y-auto">
         {loading && (
@@ -278,7 +331,9 @@ export function IssueList() {
         {!loading && issues.length === 0 && (
           <div className="flex flex-col items-center justify-center h-40 gap-2 text-slate-500">
             <AlertCircle className="w-8 h-8 opacity-30" />
-            <span className="text-sm">No issues found</span>
+            <span className="text-sm">
+              {filter.folderId !== 'all' && !filter.search ? 'No tasks in this folder yet — add one above' : 'No issues found'}
+            </span>
           </div>
         )}
         <AnimatePresence initial={false}>
