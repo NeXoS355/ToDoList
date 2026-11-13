@@ -2,8 +2,8 @@ import { useEffect, useState, useCallback } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
-import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { MailPlus, Sun, Moon, Monitor } from 'lucide-react';
 import { useIssueStore } from './stores/issueStore';
 import { IssueList } from './components/IssueList/IssueList';
@@ -24,6 +24,19 @@ interface Draft {
 }
 
 const EMAIL_FILE_RE = /\.(eml|msg)$/i;
+
+// Windows uses the webview's own HTML5 drop (native Tauri drop is disabled in
+// tauri.windows.conf.json): classic Outlook drags mails as *virtual* files
+// without a path, which only the webview (WebView2) turns into real Files.
+// Elsewhere the native Tauri drop stays — WebKitGTK's HTML5 drop does not
+// hand over dropped files reliably.
+const HTML5_DROP = /Windows/i.test(navigator.userAgent);
+
+/** A dropped file, independent of which drop mechanism delivered it. */
+interface DroppedFile {
+  name: string;
+  read: () => Promise<Uint8Array>;
+}
 
 type Theme = 'light' | 'dark' | 'system';
 
@@ -104,8 +117,47 @@ export default function App() {
     return () => { unlisten.then(f => f()); };
   }, [openNewIssue]);
 
-  // Drag an email file onto the window → read it (Rust) → parse → prefilled draft.
+  // Dropped files → an email becomes a prefilled draft, everything else
+  // attaches to the open issue.
+  const handleDroppedFiles = useCallback(async (files: DroppedFile[]) => {
+    const emailFile = files.find(f => EMAIL_FILE_RE.test(f.name));
+    const otherFiles = files.filter(f => !EMAIL_FILE_RE.test(f.name));
+    try {
+      if (emailFile) {
+        const parsed = await parseEmailFile(emailFile.name, await emailFile.read());
+        if (parsed) openFromEmail(parsed);
+        else useIssueStore.setState({ error: `Could not read "${emailFile.name}" as an email.` });
+      }
+      if (otherFiles.length) {
+        // Non-email files attach to the currently open issue; without one
+        // there is no sane target, so say so instead of dropping silently.
+        const { selectedId, addAttachment } = useIssueStore.getState();
+        if (selectedId) {
+          const attached: string[] = [];
+          for (const f of otherFiles) {
+            const file = new File([await f.read() as BlobPart], f.name, { type: guessMime(f.name) });
+            const id = await addAttachment(selectedId, file);
+            if (id) attached.push(f.name);
+          }
+          if (attached.length) {
+            useIssueStore.setState({
+              notice: attached.length === 1 ? `"${attached[0]}" attached.` : `${attached.length} files attached.`,
+            });
+          }
+        } else if (!emailFile) {
+          useIssueStore.setState({ error: 'Select an issue first to attach files — or drop a .eml/.msg email to create a task.' });
+        }
+      }
+    } catch (err) {
+      console.error('Failed to handle dropped file', err);
+      // Surface it — a silent drop failure looks like the app ignored the user.
+      useIssueStore.setState({ error: `Could not import dropped file: ${err instanceof Error ? err.message : String(err)}` });
+    }
+  }, [openFromEmail]);
+
+  // Native Tauri drop (Linux/macOS): we only get paths, Rust reads the bytes.
   useEffect(() => {
+    if (HTML5_DROP) return;
     const unlisten = getCurrentWebview().onDragDropEvent(async event => {
       const p = event.payload;
       if (p.type === 'over' || p.type === 'enter') {
@@ -114,46 +166,77 @@ export default function App() {
         setDragging(false);
       } else if (p.type === 'drop') {
         setDragging(false);
-        const emailPath = p.paths.find(f => EMAIL_FILE_RE.test(f));
-        const otherPaths = p.paths.filter(f => !EMAIL_FILE_RE.test(f));
-        try {
-          if (emailPath) {
-            const b64 = await invoke<string>('read_file_base64', { path: emailPath });
-            const name = emailPath.split(/[\\/]/).pop() ?? emailPath;
-            const parsed = await parseEmailFile(name, base64ToBytes(b64));
-            if (parsed) openFromEmail(parsed);
-          }
-          if (otherPaths.length) {
-            // Non-email files attach to the currently open issue; without one
-            // there is no sane target, so say so instead of dropping silently.
-            const { selectedId, addAttachment } = useIssueStore.getState();
-            if (selectedId) {
-              const attached: string[] = [];
-              for (const path of otherPaths) {
-                const b64 = await invoke<string>('read_file_base64', { path });
-                const name = path.split(/[\\/]/).pop() ?? path;
-                const bytes = base64ToBytes(b64);
-                const id = await addAttachment(selectedId, new File([bytes], name, { type: guessMime(name) }));
-                if (id) attached.push(name);
-              }
-              if (attached.length) {
-                useIssueStore.setState({
-                  notice: attached.length === 1 ? `"${attached[0]}" attached.` : `${attached.length} files attached.`,
-                });
-              }
-            } else if (!emailPath) {
-              useIssueStore.setState({ error: 'Select an issue first to attach files — or drop a .eml/.msg email to create a task.' });
-            }
-          }
-        } catch (err) {
-          console.error('Failed to handle dropped file', err);
-          // Surface it — a silent drop failure looks like the app ignored the user.
-          useIssueStore.setState({ error: `Could not import dropped file: ${err instanceof Error ? err.message : String(err)}` });
+        if (!p.paths.length) {
+          // e.g. Thunderbird: it only offers a file promise (XDS), no path.
+          useIssueStore.setState({ error: 'No file arrived — drag the email to the desktop first (e.g. from Thunderbird), then drop the .eml file here.' });
+          return;
         }
+        await handleDroppedFiles(p.paths.map(path => ({
+          name: path.split(/[\\/]/).pop() ?? path,
+          read: async () => base64ToBytes(await invoke<string>('read_file_base64', { path })),
+        })));
       }
     });
     return () => { unlisten.then(f => f()); };
-  }, [openFromEmail]);
+  }, [handleDroppedFiles]);
+
+  // HTML5 drop (Windows) — see HTML5_DROP.
+  useEffect(() => {
+    if (!HTML5_DROP) return;
+    let depth = 0; // dragenter/leave fire per child element — count them
+    let internal = false; // drags that started inside the app (text, rows)
+
+    const onDragStart = () => { internal = true; };
+    const onDragEnd = () => { internal = false; };
+    const isExternal = (e: DragEvent) => !internal && !!e.dataTransfer;
+
+    const onDragEnter = (e: DragEvent) => {
+      if (!isExternal(e)) return;
+      e.preventDefault();
+      depth++;
+      setDragging(true);
+    };
+    const onDragOver = (e: DragEvent) => {
+      if (!isExternal(e)) return;
+      e.preventDefault(); // required, or the drop is refused
+      e.dataTransfer!.dropEffect = 'copy';
+    };
+    const onDragLeave = (e: DragEvent) => {
+      if (!isExternal(e)) return;
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) setDragging(false);
+    };
+    const onDrop = async (e: DragEvent) => {
+      if (!isExternal(e)) return;
+      e.preventDefault(); // never let the webview navigate to a dropped file
+      depth = 0;
+      setDragging(false);
+      const files = Array.from(e.dataTransfer!.files);
+      if (!files.length) {
+        useIssueStore.setState({ error: 'Nothing to import was dropped — try saving the email as .msg/.eml first, then drop that file.' });
+        return;
+      }
+      await handleDroppedFiles(files.map(f => ({
+        name: f.name,
+        read: async () => new Uint8Array(await f.arrayBuffer()),
+      })));
+    };
+
+    document.addEventListener('dragstart', onDragStart);
+    document.addEventListener('dragend', onDragEnd);
+    window.addEventListener('dragenter', onDragEnter);
+    window.addEventListener('dragover', onDragOver);
+    window.addEventListener('dragleave', onDragLeave);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      document.removeEventListener('dragstart', onDragStart);
+      document.removeEventListener('dragend', onDragEnd);
+      window.removeEventListener('dragenter', onDragEnter);
+      window.removeEventListener('dragover', onDragOver);
+      window.removeEventListener('dragleave', onDragLeave);
+      window.removeEventListener('drop', onDrop);
+    };
+  }, [handleDroppedFiles]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === 'n' && !e.ctrlKey && !e.metaKey && !(e.target instanceof HTMLInputElement) && !(e.target instanceof HTMLTextAreaElement)) {

@@ -271,7 +271,7 @@ export async function parseMsg(buffer: ArrayBuffer): Promise<ParsedEmail | null>
       to: to || undefined,
       date: data.messageDeliveryTime || undefined,
       subject: data.subject || undefined,
-      body: (body || '').trim(),
+      body: (body || '').replace(/\r\n?/g, '\n').trim(),
     };
   } catch {
     return null;

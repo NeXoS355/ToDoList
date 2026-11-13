@@ -1,0 +1,17 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "title": "ToDoList",
+        "width": 1200,
+        "height": 750,
+        "minWidth": 800,
+        "minHeight": 500,
+        "devtools": false,
+        "backgroundColor": "#0b0f14",
+        "dragDropEnabled": false
+      }
+    ]
+  }
+}

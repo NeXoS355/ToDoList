@@ -24,6 +24,7 @@ function formatDueChip(ts: number): string {
  */
 export function QuickComposer({ onAddDetails }: { onAddDetails: (title: string) => void }) {
   const createIssue = useIssueStore(s => s.createIssue);
+  const selectIssue = useIssueStore(s => s.selectIssue);
   const labels = useIssueStore(s => s.labels);
   const [value, setValue] = useState('');
   const [flash, setFlash] = useState(0);
@@ -36,13 +37,14 @@ export function QuickComposer({ onAddDetails }: { onAddDetails: (title: string) 
     if (!parsed.title) return; // tokens alone are not a task
     setValue('');
     setFlash(f => f + 1); // retrigger the confirmation pulse
-    await createIssue({
+    const id = await createIssue({
       title: parsed.title,
       body: '',
       priority: parsed.priority ?? 'medium',
       labelIds: parsed.labels.map(l => l.id),
       dueDate: parsed.dueDate,
     });
+    if (id) selectIssue(id); // show the new task right away
     inputRef.current?.focus();
   };
 
